@@ -2,14 +2,11 @@ package hsm_test
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/stateforward/go-hsm"
-	"github.com/stateforward/go-hsm/pkg/plantuml"
-	"github.com/stateforward/go-hsm/pkg/tests"
 )
 
 type Trace struct {
@@ -118,6 +115,7 @@ func TestHSM(t *testing.T) {
 				return check
 			},
 		)),
+		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s"), hsm.Target("/s"), hsm.Effect(mockAction("s.D.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("C"), hsm.Source("/s/s1"), hsm.Target("/s/s2"), hsm.Effect(mockAction("s1.C.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("E"), hsm.Source("/s"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s.E.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("G"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s2/s21/s211"), hsm.Effect(mockAction("s11.G.transition.effect", false))),
@@ -128,7 +126,7 @@ func TestHSM(t *testing.T) {
 				return check
 			},
 		)),
-		hsm.Transition(hsm.After(time.Second), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11")),
+		hsm.Transition(hsm.After(time.Second), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s211.after.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("H"), hsm.Source("/s/s1/s11"), hsm.Target(
 			hsm.Choice(
 				hsm.Transition(hsm.Target("/s/s1"), hsm.Guard(
@@ -136,20 +134,17 @@ func TestHSM(t *testing.T) {
 						return hsm.Storage().foo == 0
 					},
 				)),
-				hsm.Transition(hsm.Target("/s/s2")),
+				hsm.Transition(hsm.Target("/s/s2"), hsm.Effect(mockAction("s11.H.choice.transition.effect", false))),
 			),
-		)),
+		), hsm.Effect(mockAction("s11.H.transition.effect", false))),
 	)
-	fmt.Println(plantuml.Generate(&model))
 	sm := hsm.New(&storage{
 		Context: context.Background(),
 		foo:     0,
 	}, &model)
-	tests.Run(t, sm)
 
 	if sm.State() != "/s/s2/s21/s211" {
-		t.Error("Initial state is not /s/s2/s21/s211", "state", sm.State())
-		return
+		t.Fatal("Initial state is not /s/s2/s21/s211", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"initial.effect", "s.entry", "s2.entry", "s2.initial.effect", "s21.entry", "s211.entry"},
@@ -184,120 +179,133 @@ func TestHSM(t *testing.T) {
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("A")) {
-		t.Error("event A not handled")
-		return
+		t.Fatal("event A not handled")
 	}
 	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"s11.exit", "s1.exit", "s1.A.transition.effect", "s1.entry", "s1.initial.effect", "s11.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("D")) {
-		t.Error("event D not handled")
-		return
+		t.Fatal("event D not handled")
 	}
-	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+	if sm.State() != "/s" {
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
-		sync: []string{"s11.exit", "s1.exit", "s1.D.transition.effect", "s.initial.effect", "s1.entry", "s11.entry"},
+		sync: []string{"s11.exit", "s1.exit", "s1.D.transition.effect"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("D")) {
-		t.Error("event D not handled")
-		return
+		t.Fatal("event D not handled")
 	}
 	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
-		sync: []string{"s11.exit", "s11.D.transition.effect", "s1.initial.effect", "s11.entry"},
+		sync: []string{"s.exit", "s.D.transition.effect", "s.entry", "s.initial.effect", "s1.entry", "s11.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
+	}
+	trace.reset()
+	if !sm.Dispatch(hsm.Event("D")) {
+		t.Fatal("event D not handled")
+	}
+	if sm.State() != "/s/s1" {
+		t.Fatal("state is not correct", "state", sm.State())
+	}
+	if !trace.matches(Trace{
+		sync: []string{"s11.exit", "s11.D.transition.effect"},
+	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("C")) {
-		t.Error("event C not handled")
-		return
+		t.Fatal("event C not handled")
 	}
 	if sm.State() != "/s/s2/s21/s211" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
-		sync: []string{"s11.exit", "s1.exit", "s1.C.transition.effect", "s2.entry", "s2.initial.effect", "s21.entry", "s211.entry"},
+		sync: []string{"s1.exit", "s1.C.transition.effect", "s2.entry", "s2.initial.effect", "s21.entry", "s211.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("E")) {
-		t.Error("event E not handled")
-		return
+		t.Fatal("event E not handled")
 	}
 	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"s211.exit", "s21.exit", "s2.exit", "s.E.transition.effect", "s1.entry", "s11.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("E")) {
-		t.Error("event E not handled")
-		return
+		t.Fatal("event E not handled")
 	}
 	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"s11.exit", "s1.exit", "s.E.transition.effect", "s1.entry", "s11.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("G")) {
-		t.Error("event G not handled")
-		return
+		t.Fatal("event G not handled")
 	}
 	if sm.State() != "/s/s2/s21/s211" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"s11.exit", "s1.exit", "s11.G.transition.effect", "s2.entry", "s21.entry", "s211.entry"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	if !sm.Dispatch(hsm.Event("I")) {
-		t.Error("event I not handled")
-		return
+		t.Fatal("event I not handled")
 	}
 	if sm.State() != "/s/s2/s21/s211" {
-		t.Error("state is not correct", "state", sm.State())
-		return
+		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
 		sync: []string{"s.I.transition.effect"},
 	}) {
-		t.Error("transition actions are not correct", "trace", trace)
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
 	time.Sleep(2 * time.Second)
 	if sm.State() != "/s/s1/s11" {
-		t.Error("state is not correct", "state", sm.State())
+		t.Fatal("state is not correct", "state", sm.State())
+	}
+	if !trace.matches(Trace{
+		sync: []string{"s211.exit", "s21.exit", "s2.exit", "s211.after.transition.effect", "s1.entry", "s11.entry"},
+	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
+	}
+	trace.reset()
+	if !sm.Dispatch(hsm.Event("H")) {
+		t.Fatal("event H not handled")
+	}
+	if sm.State() != "/s/s2/s21/s211" {
+		t.Fatal("state is not correct", "state", sm.State())
+	}
+	if !trace.matches(Trace{
+		sync: []string{"s11.H.transition.effect", "s11.exit", "s1.exit", "s11.H.choice.transition.effect", "s2.entry", "s2.initial.effect", "s21.entry", "s211.entry"},
+	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 
 }

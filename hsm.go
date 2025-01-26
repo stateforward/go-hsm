@@ -306,7 +306,7 @@ func Transition(partialElements ...Partial) Partial {
 			builder.steps = append(builder.steps, func(builder *Builder, stack []elements.Element) elements.Element {
 				// precompute transition paths for the source state and nested states
 				for qualifiedName, element := range builder.elements {
-					if strings.HasPrefix(qualifiedName, transition.source) && kinds.IsKind(element.Kind(), kinds.State, kinds.StateMachine) {
+					if strings.HasPrefix(qualifiedName, transition.source) && kinds.IsKind(element.Kind(), kinds.Vertex, kinds.StateMachine) {
 						exit := []string{}
 						if kind != kinds.Internal {
 							exiting := element.QualifiedName()
@@ -682,12 +682,12 @@ func (hsm *HSM[T]) Storage() T {
 	return hsm.storage
 }
 
-func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent) elements.Element {
+func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent, defaultEntry bool) elements.Element {
 	if hsm == nil {
 		return nil
 	}
-	kind := element.Kind()
-	if kinds.IsKind(kind, kinds.State) {
+	switch element.Kind() {
+	case kinds.State:
 		state := element.(*state)
 		if entry := get[*behavior](hsm.model, state.entry); entry != nil {
 			hsm.execute(entry, event)
@@ -729,27 +729,25 @@ func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent) elements.Elem
 				}
 			}
 		}
-		// TODO: completion transitions
-		// go func() {
-		// 	if activity != nil {
-		// 		hsm.wait(activity)
-		// 	}
-		// 	hsm.mutex.Lock()
-		// 	defer hsm.mutex.Unlock()
-		// 	slog.Info("activity completed", "activity", activity.QualifiedName())
-		// }()
-		// if len(defaultEntry) > 0 && defaultEntry[0] {
-		// return hsm.enter(element, event, true)
-		// }
-		return element
-	} else if kinds.IsKind(kind, kinds.Choice) {
+		if !defaultEntry {
+			return element
+		}
+		return hsm.initial(element, event)
+	case kinds.Choice:
+		slog.Info("enter choice", "choice", element.QualifiedName())
 		for _, qualifiedName := range element.(*vertex).transitions {
-			if element := get[*transition](hsm.model, qualifiedName); element != nil {
-				hsm.enter(element, event)
+			if transition := get[*transition](hsm.model, qualifiedName); transition != nil {
+				if constraint := get[*constraint[T]](hsm.model, transition.Guard()); constraint != nil {
+					if !hsm.evaluate(constraint, event) {
+						continue
+					}
+				}
+				return hsm.transition(element, transition, event)
 			}
 		}
+	case kinds.Initial:
+		slog.Info("enter initial", "initial", element.QualifiedName())
 	}
-
 	return nil
 }
 
@@ -877,17 +875,21 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 		return current
 	}
 	for _, entering := range path.enter {
-		current, ok = hsm.model.elements[entering]
+		next, ok := hsm.model.elements[entering]
 		if !ok {
 			return nil
 		}
-		hsm.enter(current, event)
+		defaultEntry := entering == transition.target
+		current = hsm.enter(next, event, defaultEntry)
+		if defaultEntry {
+			return current
+		}
 	}
 	current, ok = hsm.model.elements[transition.target]
 	if !ok {
 		return nil
 	}
-	return hsm.initial(current, event)
+	return current
 }
 
 func (hsm *HSM[T]) terminate(element *behavior) {
