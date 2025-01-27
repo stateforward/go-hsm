@@ -784,11 +784,8 @@ type HSM[T context.Context] struct {
 
 type Context[T context.Context] struct {
 	context.Context
-	hsm *HSM[T]
-}
-
-func (ctx Context[T]) Storage() T {
-	return ctx.hsm.storage
+	hsm     *HSM[T]
+	Storage T
 }
 
 func (ctx Context[T]) Dispatch(event Event) bool {
@@ -892,6 +889,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 								Context[T]{
 									Context: ctx,
 									hsm:     hsm,
+									Storage: hsm.storage,
 								},
 							)
 							timer := time.NewTimer(duration)
@@ -999,6 +997,7 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			element.action(Context[T]{
 				Context: ctx,
 				hsm:     hsm,
+				Storage: hsm.storage,
 			}, event)
 			close(channel)
 		}(current.channel)
@@ -1006,6 +1005,7 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 		element.action(Context[T]{
 			Context: hsm.Context,
 			hsm:     hsm,
+			Storage: hsm.storage,
 		}, event)
 
 	}
@@ -1020,6 +1020,7 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 		Context[T]{
 			Context: hsm.Context,
 			hsm:     hsm,
+			Storage: hsm.storage,
 		},
 		event,
 	)

@@ -82,9 +82,9 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Trigger("A"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s1.A.transition.effect", false))),
 			),
 			hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s11.D.transition.effect", false)), hsm.Guard(
-				func(hsm hsm.Context[*storage], event hsm.Event) bool {
-					check := hsm.Storage().foo == 1
-					hsm.Storage().foo = 0
+				func(ctx hsm.Context[*storage], event hsm.Event) bool {
+					check := ctx.Storage.foo == 1
+					ctx.Storage.foo = 0
 					return check
 				},
 			)),
@@ -121,9 +121,9 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Target("/s/s2")),
 			), hsm.Effect(mockAction("initial.effect", false))),
 		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1"), hsm.Target("/s"), hsm.Effect(mockAction("s1.D.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Context[*storage], event hsm.Event) bool {
-				check := hsm.Storage().foo == 0
-				hsm.Storage().foo++
+			func(ctx hsm.Context[*storage], event hsm.Event) bool {
+				check := ctx.Storage.foo == 0
+				ctx.Storage.foo++
 				return check
 			},
 		)),
@@ -133,8 +133,8 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("G"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s2/s21/s211"), hsm.Effect(mockAction("s11.G.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("I"), hsm.Source("/s"), hsm.Effect(mockAction("s.I.transition.effect", false)), hsm.Guard(
 			func(hsm hsm.Context[*storage], event hsm.Event) bool {
-				check := hsm.Storage().foo == 0
-				hsm.Storage().foo = 1
+				check := hsm.Storage.foo == 0
+				hsm.Storage.foo = 1
 				return check
 			},
 		)),
@@ -147,8 +147,8 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("H"), hsm.Source("/s/s1/s11"), hsm.Target(
 			hsm.Choice(
 				hsm.Transition(hsm.Target("/s/s1"), hsm.Guard(
-					func(hsm hsm.Context[*storage], event hsm.Event) bool {
-						return hsm.Storage().foo == 0
+					func(ctx hsm.Context[*storage], event hsm.Event) bool {
+						return ctx.Storage.foo == 0
 					},
 				)),
 				hsm.Transition(hsm.Target("/s/s2"), hsm.Effect(mockAction("s11.H.choice.transition.effect", false))),
