@@ -713,35 +713,20 @@ func Trigger(events ...string) Partial {
 	}
 }
 
-func After(duration time.Duration) Partial {
-	units := ""
-	value := 0
-	switch {
-	case duration < time.Millisecond:
-		units = "µs"
-		value = int(duration.Microseconds())
-	case duration < time.Second:
-		units = "ms"
-		value = int(duration.Milliseconds())
-	case duration < time.Minute:
-		units = "s"
-		value = int(duration.Seconds())
-	case duration < time.Hour:
-		units = "m"
-		value = int(duration.Minutes())
-	case duration < time.Hour:
-		units = "s"
-		value = int(duration.Seconds())
+func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName ...string) Partial {
+	name := ".after"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
 	}
 	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
-		name := fmt.Sprintf("after(%d%s)_%d", value, units, len(owner.(*transition).events))
+		name := fmt.Sprintf("%s_%d", name, len(owner.(*transition).events))
 		owner.(*transition).events[name] = &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: name},
-			data:    duration,
+			data:    expr,
 		}
 		return owner
 	}
@@ -894,7 +879,13 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 					case kinds.TimeEvent:
 						active := hsm.activate(element)
 						go func(ctx context.Context, channel chan struct{}) {
-							timer := time.NewTimer(event.Data().(time.Duration))
+							duration := event.Data().(func(hsm Context[T]) time.Duration)(
+								Context[T]{
+									Context: ctx,
+									hsm:     hsm,
+								},
+							)
+							timer := time.NewTimer(duration)
 							defer timer.Stop()
 							defer close(channel)
 							for {
