@@ -194,7 +194,9 @@ You can create transitions that occur after a time delay:
 
 ```go
 hsm.Transition(
-    hsm.After(time.Second * 30),
+    hsm.After(func(hsm hsm.Context[*storage]) time.Duration {
+        return time.Second * 30
+    }),
     hsm.Source("active"),
     hsm.Target("timeout")
 )
