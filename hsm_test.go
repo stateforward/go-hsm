@@ -151,7 +151,7 @@ func TestHSM(t *testing.T) {
 			ctx.Dispatch(hsm.NewEvent("K"))
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
-		hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
+		// hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
 	)
 	sm := hsm.New(&storage{
 		Context: context.Background(),

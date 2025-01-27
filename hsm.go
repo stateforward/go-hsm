@@ -52,15 +52,19 @@ type model struct {
 	elements map[string]elements.Element
 }
 
+func (model *model) Elements() map[string]elements.Element {
+	return model.elements
+}
+
 /******* Builder *******/
 
 type Builder struct {
 	model
-	steps []Partial
+	partials []Partial
 }
 
-func (model *model) Elements() map[string]elements.Element {
-	return model.elements
+func (builder *Builder) Push(partial Partial) {
+	builder.partials = append(builder.partials, partial)
 }
 
 type Partial = func(model *Builder, stack []elements.Element) elements.Element
@@ -224,12 +228,12 @@ func Model(partials ...Partial) model {
 			},
 			elements: map[string]elements.Element{},
 		},
-		steps: partials,
+		partials: partials,
 	}
 	stack := []elements.Element{&builder}
-	for len(builder.steps) > 0 {
-		partials = builder.steps
-		builder.steps = []Partial{}
+	for len(builder.partials) > 0 {
+		partials = builder.partials
+		builder.partials = []Partial{}
 		apply(&builder, stack, partials...)
 	}
 	return builder.model
@@ -295,26 +299,33 @@ func lca(a, b string) string {
 	return lca(path.Dir(a), path.Dir(b))
 }
 
-func Transition(partialElements ...Partial) Partial {
+func Transition[T interface{ Partial | string }](nameOrPartialElement T, partialElements ...Partial) Partial {
+	name := ""
+	switch any(nameOrPartialElement).(type) {
+	case string:
+		name = any(nameOrPartialElement).(string)
+	case Partial:
+		partialElements = append([]Partial{any(nameOrPartialElement).(Partial)}, partialElements...)
+	}
 	return func(builder *Builder, stack []elements.Element) elements.Element {
-		owner := find(stack, kinds.Vertex, kinds.StateMachine)
+		owner := find(stack, kinds.Vertex)
 		if owner == nil {
-			slog.Error("transition must be called within a State or StateMachine")
 			panic(fmt.Errorf("transition must be called within a State or StateMachine"))
+		}
+		if name == "" {
+			name = fmt.Sprintf("transition_%d", len(builder.elements))
 		}
 		transition := &transition{
 			events: map[string]elements.Event{},
 			element: element{
 				kind:          kinds.Transition,
-				qualifiedName: path.Join(owner.QualifiedName(), fmt.Sprintf("transition_%d", len(builder.elements))),
+				qualifiedName: path.Join(owner.QualifiedName(), name),
 			},
 			paths: map[string]paths{},
 		}
 		builder.elements[transition.QualifiedName()] = transition
 		stack = append(stack, transition)
-		for _, partialElement := range partialElements {
-			partialElement(builder, stack)
-		}
+		apply(builder, stack, partialElements...)
 		if transition.source == "" {
 			transition.source = owner.QualifiedName()
 		}
@@ -331,12 +342,12 @@ func Transition(partialElements ...Partial) Partial {
 		}
 		if len(transition.events) == 0 && !kinds.IsKind(sourceElement.Kind(), kinds.Pseudostate) {
 
-			// completion transition
+			// TODO: completion transition
 			qualifiedName := path.Join(transition.source, ".completion")
 			transition.events[qualifiedName] = &event{
 				element: element{kind: kinds.CompletionEvent, qualifiedName: qualifiedName},
 			}
-			// panic(fmt.Errorf("completion transition not implemented"))
+			panic(fmt.Errorf("completion transition not implemented"))
 		}
 		var kind uint64
 		if transition.target == transition.source {
@@ -364,7 +375,7 @@ func Transition(partialElements ...Partial) Partial {
 				exit:  []string{sourceElement.QualifiedName()},
 			}
 		} else {
-			builder.steps = append(builder.steps, func(builder *Builder, stack []elements.Element) elements.Element {
+			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
 				// precompute transition paths for the source state and nested states
 				for qualifiedName, element := range builder.elements {
 					if strings.HasPrefix(qualifiedName, transition.source) && kinds.IsKind(element.Kind(), kinds.Vertex, kinds.StateMachine) {
@@ -395,39 +406,54 @@ func Transition(partialElements ...Partial) Partial {
 	}
 }
 
-func Source(id string) Partial {
-	return func(model *Builder, stack []elements.Element) elements.Element {
+func Source[T interface{ Partial | string }](nameOrPartialElement T) Partial {
+	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
-			slog.Error("source must be called within a Transition")
 			panic(fmt.Errorf("source must be called within a Transition"))
 		}
-
-		if !path.IsAbs(id) {
-			if ancestor := find(stack, kinds.State, kinds.StateMachine); ancestor != nil {
-				id = path.Join(ancestor.QualifiedName(), id)
+		var name string
+		switch any(nameOrPartialElement).(type) {
+		case string:
+			name = any(nameOrPartialElement).(string)
+			if !path.IsAbs(name) {
+				if ancestor := find(stack, kinds.State, kinds.StateMachine); ancestor != nil {
+					name = path.Join(ancestor.QualifiedName(), name)
+				}
 			}
+			// push a validation step to ensure the source exists after the model is built
+			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
+				if _, ok := builder.model.elements[name]; !ok {
+					slog.Error("missing source", "id", name)
+					panic(fmt.Errorf("missing source %s", name))
+				}
+				return owner
+			})
+		case Partial:
+			element := any(nameOrPartialElement).(Partial)(builder, stack)
+			if element == nil {
+				panic(fmt.Errorf("source is nil"))
+			}
+			name = element.QualifiedName()
 		}
-		if _, ok := model.elements[id]; !ok {
-			slog.Error("missing source", "id", id)
-			panic(fmt.Errorf("missing source %s", id))
-		}
-		owner.(*transition).source = id
+		owner.(*transition).source = name
 		return owner
 	}
 }
-
-var From = Source
 
 func Defer(events ...uint64) Partial {
 	panic("not implemented")
 }
 
 func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("Target must be called within a Transition"))
+			panic(fmt.Errorf("Target() must be called within a Transition"))
+		}
+		transition := owner.(*transition)
+		if transition.target != "" {
+			panic(fmt.Errorf("transition %s already has target %s", transition.QualifiedName(), transition.target))
 		}
 		var qualifiedName string
 		switch target := any(nameOrPartialElement).(type) {
@@ -438,32 +464,36 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 					qualifiedName = path.Join(ancestor.QualifiedName(), qualifiedName)
 				}
 			}
-			if _, exists := model.elements[qualifiedName]; !exists {
-				panic(fmt.Errorf("missing target %s", target))
-			}
+			// push a validation step to ensure the target exists after the model is built
+			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
+				if _, exists := builder.model.elements[qualifiedName]; !exists {
+					panic(fmt.Errorf("missing target %s for transition %s", target, transition.QualifiedName()))
+				}
+				return transition
+			})
 		case Partial:
-			targetElement := target(model, stack)
+			targetElement := target(builder, stack)
 			if targetElement == nil {
 				panic(fmt.Errorf("target is nil"))
 			}
 			qualifiedName = targetElement.QualifiedName()
 		}
 
-		owner.(*transition).target = qualifiedName
-		return owner
+		transition.target = qualifiedName
+		return transition
 	}
 }
 
 func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName ...string) Partial {
+	name := ".effect"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			slog.Error("effect must be called within a Transition")
 			panic(fmt.Errorf("effect must be called within a Transition"))
-		}
-		name := ".effect"
-		if len(maybeName) > 0 {
-			name = maybeName[0]
 		}
 		behavior := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -476,14 +506,14 @@ func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName .
 }
 
 func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeName ...string) Partial {
+	name := ".guard"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("guard must be called within a Transition"))
-		}
-		name := ".guard"
-		if len(maybeName) > 0 {
-			name = maybeName[0]
 		}
 		constraint := &constraint[T]{
 			element:    element{kind: kinds.Constraint, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -523,9 +553,19 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 		}
 		model.elements[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
-		transition := Transition(append(partialElements, Target(target), Source(initial.QualifiedName()))...)(model, stack)
-		if transition.(elements.Transition).Guard() != "" {
-			panic(fmt.Errorf("guards are not allowed on initial states"))
+		transition := (Transition(Target(target), append(partialElements, Source(initial.QualifiedName()))...)(model, stack)).(*transition)
+		// validation logic
+		if transition.guard != "" {
+			panic(fmt.Errorf("initial %s cannot have a guard", initial.QualifiedName()))
+		}
+		if len(transition.events) > 0 {
+			panic(fmt.Errorf("initial %s cannot have triggers", initial.QualifiedName()))
+		}
+		if !strings.HasPrefix(transition.target, owner.QualifiedName()) {
+			panic(fmt.Errorf("initial %s must target a nested state not %s", initial.QualifiedName(), transition.target))
+		}
+		if len(initial.transitions) > 1 {
+			panic(fmt.Errorf("initial %s cannot have multiple transitions %v", initial.QualifiedName(), initial.transitions))
 		}
 		return transition
 	}
@@ -575,15 +615,15 @@ func Choice[T interface{ Partial | string }](elementOrName T, partialElements ..
 }
 
 func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+	name := ".entry"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("entry must be called within a State")
 			panic(fmt.Errorf("entry must be called within a State"))
-		}
-		name := ".entry"
-		if len(maybeName) > 0 {
-			name = maybeName[0]
 		}
 		element := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -596,16 +636,17 @@ func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ..
 }
 
 func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+	name := ".activity"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("activity must be called within a State")
 			panic(fmt.Errorf("activity must be called within a State"))
 		}
-		name := ".activity"
-		if len(maybeName) > 0 {
-			name = maybeName[0]
-		}
+
 		element := &behavior[T]{
 			element: element{kind: kinds.Concurrent, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
@@ -617,16 +658,17 @@ func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName
 }
 
 func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+	name := ".exit"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("exit must be called within a State")
 			panic(fmt.Errorf("exit must be called within a State"))
 		}
-		name := ".exit"
-		if len(maybeName) > 0 {
-			name = maybeName[0]
-		}
+
 		element := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
