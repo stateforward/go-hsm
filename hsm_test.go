@@ -2,11 +2,13 @@ package hsm_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/stateforward/go-hsm"
+	"github.com/stateforward/go-hsm/pkg/plantuml"
 )
 
 type Trace struct {
@@ -157,7 +159,7 @@ func TestHSM(t *testing.T) {
 		Context: context.Background(),
 		foo:     0,
 	}, &model)
-
+	fmt.Println(plantuml.Generate(&model))
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("Initial state is not /s/s2/s21/s211", "state", sm.State())
 	}

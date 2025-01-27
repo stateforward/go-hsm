@@ -24,10 +24,16 @@ type element struct {
 }
 
 func (element *element) Kind() uint64 {
+	if element == nil {
+		return 0
+	}
 	return element.kind
 }
 
 func (element *element) Owner() string {
+	if element == nil {
+		return ""
+	}
 	return path.Dir(element.qualifiedName)
 }
 
@@ -87,6 +93,18 @@ type state struct {
 	entry    string
 	exit     string
 	activity string
+}
+
+func (state *state) Entry() string {
+	return state.entry
+}
+
+func (state *state) Activity() string {
+	return state.activity
+}
+
+func (state *state) Exit() string {
+	return state.exit
 }
 
 /******* Transition *******/

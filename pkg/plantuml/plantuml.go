@@ -14,7 +14,7 @@ import (
 )
 
 func idFromQualifiedName(qualifiedName string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(qualifiedName, "/"), ".", "_"), "/", ".")
+	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(qualifiedName, "/"), "."), ".", "_"), "/", ".")
 }
 
 func generateState(builder *strings.Builder, depth int, state elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
@@ -56,6 +56,18 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 		}
 		fmt.Fprintf(builder, "%sstate %s%s\n", indent, id, tag)
 	}
+	if kinds.IsKind(state.Kind(), kinds.State) {
+		state := state.(elements.State)
+		if entry := state.Entry(); entry != "" {
+			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(entry)))
+		}
+		if activity := state.Activity(); activity != "" {
+			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(activity)))
+		}
+		if exit := state.Exit(); exit != "" {
+			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(exit)))
+		}
+	}
 }
 
 func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
@@ -70,7 +82,7 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 		return
 	}
 	source := transition.Source()
-	events := ""
+	label := ""
 	if strings.HasSuffix(source, ".initial") {
 		source = "[*]"
 	} else {
@@ -79,12 +91,14 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 			for _, event := range transition.Events() {
 				names = append(names, event.Name())
 			}
-			events = fmt.Sprintf(": %s", strings.Join(names, "|"))
+			label = fmt.Sprintf(": %s", strings.Join(names, "|"))
+		} else {
+			label = ": " + transition.Name()
 		}
 	}
 	target := transition.Target()
 	indent := strings.Repeat(" ", depth*2)
-	fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), events)
+	fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), label)
 }
 
 func generateElements(builder *strings.Builder, depth int, model elements.Model, allElements []elements.Element, visited map[string]any) {

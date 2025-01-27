@@ -10,6 +10,7 @@ type Element interface {
 	Kind() uint64
 	Owner() string
 	QualifiedName() string
+	Name() string
 }
 
 type Model interface {
@@ -33,7 +34,9 @@ type Vertex interface {
 
 type State interface {
 	Vertex
-	Initial() string
+	Entry() string
+	Activity() string
+	Exit() string
 }
 
 type Event interface {
