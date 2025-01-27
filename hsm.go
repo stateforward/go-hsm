@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -723,9 +724,10 @@ func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
-		name := fmt.Sprintf("%s_%d", name, len(owner.(*transition).events))
-		owner.(*transition).events[name] = &event{
-			element: element{kind: kinds.TimeEvent, qualifiedName: name},
+		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
+		slog.Info("after", "qualifiedName", qualifiedName)
+		owner.(*transition).events[qualifiedName] = &event{
+			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
 			data:    expr,
 		}
 		return owner

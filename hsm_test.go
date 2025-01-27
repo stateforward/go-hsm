@@ -141,6 +141,7 @@ func TestHSM(t *testing.T) {
 			func(hsm hsm.Context[*storage]) time.Duration {
 				return time.Second
 			},
+			"s211.after",
 		), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s211.after.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("H"), hsm.Source("/s/s1/s11"), hsm.Target(
 			hsm.Choice(
