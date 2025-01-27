@@ -698,16 +698,23 @@ func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...
 	}
 }
 
-func Trigger(events ...string) Partial {
+func Trigger[T interface{ string | *event }](events ...T) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
-			slog.Error("trigger must be called within a Transition")
 			panic(fmt.Errorf("trigger must be called within a Transition"))
 		}
-		for _, name := range events {
-			owner.(*transition).events[name] = &event{
-				element: element{kind: kinds.Event, qualifiedName: name},
+		transition := owner.(*transition)
+		for _, eventOrName := range events {
+			switch any(eventOrName).(type) {
+			case string:
+				name := any(eventOrName).(string)
+				transition.events[name] = &event{
+					element: element{kind: kinds.Event, qualifiedName: name},
+				}
+			case *event:
+				event := any(eventOrName).(*event)
+				transition.events[event.QualifiedName()] = event
 			}
 		}
 		return owner

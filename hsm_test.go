@@ -62,6 +62,7 @@ func TestHSM(t *testing.T) {
 			}
 		}
 	}
+	dEvent := hsm.NewEvent("D")
 	model := hsm.Model(
 		hsm.State("s",
 			hsm.Entry(mockAction("s.entry", false)),
@@ -126,7 +127,7 @@ func TestHSM(t *testing.T) {
 				return check
 			},
 		)),
-		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s"), hsm.Target("/s"), hsm.Effect(mockAction("s.D.transition.effect", false))),
+		hsm.Transition(hsm.Trigger(dEvent), hsm.Source("/s"), hsm.Target("/s"), hsm.Effect(mockAction("s.D.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("C"), hsm.Source("/s/s1"), hsm.Target("/s/s2"), hsm.Effect(mockAction("s1.C.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("E"), hsm.Source("/s"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s.E.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("G"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s2/s21/s211"), hsm.Effect(mockAction("s11.G.transition.effect", false))),
