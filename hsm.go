@@ -1,12 +1,14 @@
 package hsm
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"log/slog"
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unique"
 
@@ -14,10 +16,11 @@ import (
 	"github.com/stateforward/go-hsm/kinds"
 )
 
+/******* Element *******/
+
 type element struct {
 	kind          uint64
 	qualifiedName string
-	// id            uint64
 }
 
 func (element *element) Kind() uint64 {
@@ -42,21 +45,14 @@ func (element *element) QualifiedName() string {
 	return element.qualifiedName
 }
 
-// func (element *element) Id() uint64 {
-// 	if element == nil {
-// 		return 0
-// 	} else if element.id == 0 {
-// 		id := fnv.New64()
-// 		id.Write([]byte(element.qualifiedName))
-// 		element.id = id.Sum64()
-// 	}
-// 	return element.id
-// }
+/******* Model *******/
 
 type model struct {
-	element
+	state
 	elements map[string]elements.Element
 }
+
+/******* Builder *******/
 
 type Builder struct {
 	model
@@ -69,6 +65,8 @@ func (model *model) Elements() map[string]elements.Element {
 
 type Partial = func(model *Builder, stack []elements.Element) elements.Element
 
+/******* Vertex *******/
+
 type vertex struct {
 	element
 	transitions []string
@@ -78,12 +76,16 @@ func (vertex *vertex) Transitions() []string {
 	return vertex.transitions
 }
 
+/******* State *******/
+
 type state struct {
 	vertex
 	entry    string
 	exit     string
 	activity string
 }
+
+/******* Transition *******/
 
 type paths struct {
 	enter []string
@@ -120,26 +122,30 @@ func (transition *transition) Target() string {
 	return transition.target
 }
 
-type behavior struct {
+/******* Behavior *******/
+
+type behavior[T context.Context] struct {
 	element
-	action any
+	action func(ctx Context[T], event Event)
 }
 
-func (behavior *behavior) Action() any {
-	return behavior.action
-}
+/******* Constraint *******/
 
 type constraint[T context.Context] struct {
 	element
-	expression func(hsm HSM[T], event AnyEvent) bool
+	expression func(ctx Context[T], event Event) bool
 }
+
+/******* Active *******/
 
 type active struct {
 	channel chan struct{}
 	cancel  context.CancelFunc
 }
 
-type AnyEvent = elements.Event
+/******* Events *******/
+
+type Event = elements.Event
 
 type event struct {
 	element
@@ -154,6 +160,55 @@ func (event *event) Data() any {
 	return event.data
 }
 
+/******* Queue *******/
+
+type queue struct {
+	events []elements.Element
+	mutex  sync.RWMutex
+}
+
+func (q *queue) Len() int {
+	q.mutex.RLock()
+	defer q.mutex.RUnlock()
+	return len(q.events)
+}
+
+func (q *queue) Less(i, j int) bool {
+	q.mutex.RLock()
+	defer q.mutex.RUnlock()
+	return kinds.IsKind(q.events[i].Kind(), kinds.CompletionEvent) && !kinds.IsKind(q.events[j].Kind(), kinds.CompletionEvent)
+}
+
+func (q *queue) Swap(i, j int) {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	q.events[i], q.events[j] = q.events[j], q.events[i]
+}
+
+func (q *queue) Pop() any {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	event := q.events[0]
+	q.events = q.events[1:]
+	return event
+}
+
+func (q *queue) Push(event any) {
+	switch event := event.(type) {
+	case Event:
+		{
+			q.mutex.Lock()
+			defer q.mutex.Unlock()
+			if kinds.IsKind(event.Kind(), kinds.CompletionEvent) {
+				q.events = append([]elements.Element{event}, q.events...)
+			} else {
+				q.events = append(q.events, event)
+			}
+		}
+	}
+
+}
+
 func apply(model *Builder, stack []elements.Element, partials ...Partial) {
 	for _, partial := range partials {
 		partial(model, stack)
@@ -163,7 +218,9 @@ func apply(model *Builder, stack []elements.Element, partials ...Partial) {
 func Model(partials ...Partial) model {
 	builder := Builder{
 		model: model{
-			element:  element{kind: kinds.StateMachine, qualifiedName: "/"},
+			state: state{
+				vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/"}, transitions: []string{}},
+			},
 			elements: map[string]elements.Element{},
 		},
 		steps: partials,
@@ -366,7 +423,6 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
-			slog.Error("Target must be called within a Transition")
 			panic(fmt.Errorf("Target must be called within a Transition"))
 		}
 		var qualifiedName string
@@ -379,13 +435,11 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 				}
 			}
 			if _, exists := model.elements[qualifiedName]; !exists {
-				slog.Warn("missing target", "target", qualifiedName, "source", owner.(*transition).source)
 				panic(fmt.Errorf("missing target %s", target))
 			}
 		case Partial:
 			targetElement := target(model, stack)
 			if targetElement == nil {
-				slog.Warn("target is nil", "target", target)
 				panic(fmt.Errorf("target is nil"))
 			}
 			qualifiedName = targetElement.QualifiedName()
@@ -396,7 +450,7 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 	}
 }
 
-func Effect[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...string) Partial {
+func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName ...string) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
@@ -407,7 +461,7 @@ func Effect[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ..
 		if len(maybeName) > 0 {
 			name = maybeName[0]
 		}
-		behavior := &behavior{
+		behavior := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
@@ -417,11 +471,10 @@ func Effect[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ..
 	}
 }
 
-func Guard[T context.Context](fn func(hsm HSM[T], event AnyEvent) bool, maybeName ...string) Partial {
+func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeName ...string) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
-			slog.Error("guard must be called within a Transition")
 			panic(fmt.Errorf("guard must be called within a Transition"))
 		}
 		name := ".guard"
@@ -442,7 +495,6 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.StateMachine, kinds.State)
 		if owner == nil {
-			slog.Error("initial must be called within a Model or State")
 			panic(fmt.Errorf("initial must be called within a Model or State"))
 		}
 		initial := &vertex{
@@ -479,7 +531,6 @@ func Choice(partialElements ...Partial) Partial {
 	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State, kinds.Transition)
 		if owner == nil {
-			slog.Error("choice must be called within a State or Transition")
 			panic(fmt.Errorf("choice must be called within a State or Transition"))
 		} else if kinds.IsKind(owner.Kind(), kinds.Transition) {
 			source := owner.(*transition).source
@@ -509,7 +560,7 @@ func Choice(partialElements ...Partial) Partial {
 	}
 }
 
-func Entry[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...string) Partial {
+func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
@@ -520,7 +571,7 @@ func Entry[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...
 		if len(maybeName) > 0 {
 			name = maybeName[0]
 		}
-		element := &behavior{
+		element := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
@@ -530,7 +581,7 @@ func Entry[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...
 	}
 }
 
-func Activity[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...string) Partial {
+func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
@@ -541,7 +592,7 @@ func Activity[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName 
 		if len(maybeName) > 0 {
 			name = maybeName[0]
 		}
-		element := &behavior{
+		element := &behavior[T]{
 			element: element{kind: kinds.Concurrent, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
@@ -551,7 +602,7 @@ func Activity[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName 
 	}
 }
 
-func Exit[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...string) Partial {
+func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
 	return func(model *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
@@ -562,7 +613,7 @@ func Exit[T context.Context](fn func(hsm HSM[T], event AnyEvent), maybeName ...s
 		if len(maybeName) > 0 {
 			name = maybeName[0]
 		}
-		element := &behavior{
+		element := &behavior[T]{
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
@@ -603,15 +654,21 @@ func After(duration time.Duration) Partial {
 	}
 }
 
-func Event(name string, maybeData ...any) *event {
+var pool = sync.Pool{
+	New: func() any {
+		return &event{}
+	},
+}
+
+func NewEvent(name string, maybeData ...any) *event {
 	var data any
 	if len(maybeData) > 0 {
 		data = maybeData[0]
 	}
-	return &event{
-		element: element{kind: kinds.Event, qualifiedName: name},
-		data:    data,
-	}
+	event := pool.Get().(*event)
+	event.element = element{kind: kinds.Event, qualifiedName: name}
+	event.data = data
+	return event
 }
 
 func Final(name string) Partial {
@@ -620,37 +677,53 @@ func Final(name string) Partial {
 	}
 }
 
-type hsm struct {
-	behavior
-	state  elements.Element
-	model  *model
-	active map[string]*active
-	mutex  *sync.Mutex
-}
+type Execution = uint32
+
+const (
+	InTransit Execution = iota
+	InState
+)
 
 type HSM[T context.Context] struct {
 	context.Context
-	*hsm
-	storage T
+	behavior[T]
+	state     elements.Element
+	model     *model
+	active    map[string]*active
+	queue     queue
+	execution atomic.Uint32
+	storage   T
 }
 
-type Context[T context.Context] HSM[T]
+type Context[T context.Context] struct {
+	context.Context
+	hsm *HSM[T]
+}
+
+func (ctx Context[T]) Storage() T {
+	return ctx.hsm.storage
+}
+
+func (ctx Context[T]) Dispatch(event Event) bool {
+	return ctx.hsm.Dispatch(event)
+}
+
+func (ctx Context[T]) DispatchAll(event Event) {
+	ctx.hsm.DispatchAll(event)
+}
 
 var contextKey = unique.Make("context")
 
 func New[T context.Context](ctx T, model *model) *HSM[T] {
 	hsm := &HSM[T]{
-		hsm: &hsm{
-			behavior: behavior{
-				element: element{
-					kind:          kinds.StateMachine,
-					qualifiedName: model.QualifiedName(),
-				},
+		behavior: behavior[T]{
+			element: element{
+				kind:          kinds.StateMachine,
+				qualifiedName: model.QualifiedName(),
 			},
-			model:  model,
-			active: map[string]*active{},
-			mutex:  &sync.Mutex{},
 		},
+		model:   model,
+		active:  map[string]*active{},
 		storage: ctx,
 	}
 	all, ok := ctx.Value(contextKey).(*sync.Map)
@@ -659,10 +732,10 @@ func New[T context.Context](ctx T, model *model) *HSM[T] {
 	}
 	all.Store(hsm, struct{}{})
 	hsm.Context = context.WithValue(ctx, contextKey, all)
-	hsm.action = func(ctx HSM[T], event AnyEvent) {
-		hsm.mutex.Lock()
-		defer hsm.mutex.Unlock()
-		hsm.state = hsm.initial(hsm, event)
+	hsm.action = func(ctx Context[T], event Event) {
+		hsm.state = hsm.initial(&model.state, event)
+		hsm.execution.Store(InState)
+
 	}
 	hsm.execute(&hsm.behavior, nil)
 	return hsm
@@ -682,17 +755,31 @@ func (hsm *HSM[T]) Storage() T {
 	return hsm.storage
 }
 
-func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent, defaultEntry bool) elements.Element {
+func (hsm *HSM[T]) Terminate() {
+	if hsm == nil {
+		return
+	}
+	var ok bool
+	for hsm.state != nil {
+		hsm.exit(hsm.state, nil)
+		hsm.state, ok = hsm.model.elements[hsm.state.Owner()]
+		if !ok {
+			break
+		}
+	}
+}
+
+func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry bool) elements.Element {
 	if hsm == nil {
 		return nil
 	}
 	switch element.Kind() {
 	case kinds.State:
 		state := element.(*state)
-		if entry := get[*behavior](hsm.model, state.entry); entry != nil {
+		if entry := get[*behavior[T]](hsm.model, state.entry); entry != nil {
 			hsm.execute(entry, event)
 		}
-		activity := get[*behavior](hsm.model, state.activity)
+		activity := get[*behavior[T]](hsm.model, state.activity)
 		if activity != nil {
 			hsm.execute(activity, event)
 		}
@@ -734,7 +821,6 @@ func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent, defaultEntry 
 		}
 		return hsm.initial(element, event)
 	case kinds.Choice:
-		slog.Info("enter choice", "choice", element.QualifiedName())
 		for _, qualifiedName := range element.(*vertex).transitions {
 			if transition := get[*transition](hsm.model, qualifiedName); transition != nil {
 				if constraint := get[*constraint[T]](hsm.model, transition.Guard()); constraint != nil {
@@ -745,13 +831,11 @@ func (hsm *HSM[T]) enter(element elements.Element, event AnyEvent, defaultEntry 
 				return hsm.transition(element, transition, event)
 			}
 		}
-	case kinds.Initial:
-		slog.Info("enter initial", "initial", element.QualifiedName())
 	}
 	return nil
 }
 
-func (hsm *HSM[T]) initial(element elements.Element, event AnyEvent) elements.Element {
+func (hsm *HSM[T]) initial(element elements.Element, event Event) elements.Element {
 	if element == nil || hsm == nil {
 		return nil
 	}
@@ -771,7 +855,7 @@ func (hsm *HSM[T]) initial(element elements.Element, event AnyEvent) elements.El
 	return element
 }
 
-func (hsm *HSM[T]) exit(element elements.Element, event AnyEvent) {
+func (hsm *HSM[T]) exit(element elements.Element, event Event) {
 	if element == nil || hsm == nil {
 		return
 	}
@@ -790,70 +874,61 @@ func (hsm *HSM[T]) exit(element elements.Element, event AnyEvent) {
 				}
 			}
 		}
-		if activity := get[*behavior](hsm.model, state.activity); activity != nil {
+		if activity := get[*behavior[T]](hsm.model, state.activity); activity != nil {
 			hsm.terminate(activity)
 		}
-		if exit := get[*behavior](hsm.model, state.exit); exit != nil {
+		if exit := get[*behavior[T]](hsm.model, state.exit); exit != nil {
 			hsm.execute(exit, event)
 		}
 	}
 
 }
 
-func (hsm *HSM[T]) execute(element elements.Behavior, event AnyEvent) elements.Behavior {
+func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 	if hsm == nil || element == nil {
-		return nil
+		return
 	}
-	action := element.Action()
-	if action == nil {
-		return nil
-	}
-	if !kinds.IsKind(element.Kind(), kinds.Concurrent) {
-		if action, ok := action.(func(ctx HSM[T], event AnyEvent)); ok {
-			action(HSM[T]{
-				Context: hsm.Context,
-				hsm:     hsm.hsm,
-				storage: hsm.storage,
-			}, event)
+	switch element.Kind() {
+	case kinds.Concurrent:
+		current, ok := hsm.active[element.QualifiedName()]
+		if current == nil || !ok {
+			current = &active{}
+			hsm.active[element.QualifiedName()] = current
 		}
-		return element
-	}
-	current, ok := hsm.active[element.QualifiedName()]
-	if current == nil || !ok {
-		current = &active{}
-		hsm.active[element.QualifiedName()] = current
-	}
-	var ctx context.Context
-	ctx, current.cancel = context.WithCancel(hsm)
-	current.channel = make(chan struct{})
-	go func(channel chan struct{}) {
-		if action, ok := action.(func(ctx HSM[T], event AnyEvent)); ok {
-			action(HSM[T]{
+		var ctx context.Context
+		ctx, current.cancel = context.WithCancel(hsm)
+		current.channel = make(chan struct{})
+		go func(channel chan struct{}) {
+			element.action(Context[T]{
 				Context: ctx,
-				hsm:     hsm.hsm,
-				storage: hsm.storage,
+				hsm:     hsm,
 			}, event)
-		}
-		close(channel)
-	}(current.channel)
-	return element
+			close(channel)
+		}(current.channel)
+	default:
+		element.action(Context[T]{
+			Context: hsm.Context,
+			hsm:     hsm,
+		}, event)
+
+	}
+
 }
 
-func (hsm *HSM[T]) evaluate(guard *constraint[T], event AnyEvent) bool {
+func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	if hsm == nil || guard == nil || guard.expression == nil {
 		return true
 	}
 	return guard.expression(
-		HSM[T]{
+		Context[T]{
 			Context: hsm.Context,
-			hsm:     hsm.hsm,
-			storage: hsm.storage,
+			hsm:     hsm,
 		},
 		event,
 	)
 }
 
-func (hsm *HSM[T]) transition(current elements.Element, transition *transition, event AnyEvent) elements.Element {
+func (hsm *HSM[T]) transition(current elements.Element, transition *transition, event Event) elements.Element {
 	if hsm == nil {
 		return nil
 	}
@@ -868,7 +943,7 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 		}
 		hsm.exit(current, event)
 	}
-	if effect := get[elements.Behavior](hsm.model, transition.effect); effect != nil {
+	if effect := get[*behavior[T]](hsm.model, transition.effect); effect != nil {
 		hsm.execute(effect, event)
 	}
 	if kinds.IsKind(transition.kind, kinds.Internal) {
@@ -892,7 +967,7 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 	return current
 }
 
-func (hsm *HSM[T]) terminate(element *behavior) {
+func (hsm *HSM[T]) terminate(element *behavior[T]) {
 	if hsm == nil || element == nil {
 		return
 	}
@@ -905,49 +980,69 @@ func (hsm *HSM[T]) terminate(element *behavior) {
 
 }
 
-func (hsm *HSM[T]) Dispatch(event AnyEvent) bool {
+func (hsm *HSM[T]) enabled(source elements.Vertex, event Event) *transition {
+	if hsm == nil {
+		return nil
+	}
+	for _, transitionQualifiedName := range source.Transitions() {
+		transition := get[*transition](hsm.model, transitionQualifiedName)
+		if transition == nil {
+			continue
+		}
+		if _, ok := transition.Events()[event.Name()]; !ok {
+			continue
+		}
+		if guard := get[*constraint[T]](hsm.model, transition.Guard()); guard != nil {
+			if !hsm.evaluate(guard, event) {
+				continue
+			}
+		}
+		return transition
+	}
+	return nil
+}
+
+func (hsm *HSM[T]) Dispatch(event Event) bool {
 	if hsm == nil {
 		return false
 	}
-	hsm.mutex.Lock()
-	defer hsm.mutex.Unlock()
 	if hsm.state == nil {
 		return false
 	}
-	state := hsm.state.QualifiedName()
-	for state != "/" {
-		source := get[elements.Vertex](hsm.model, state)
-		if source == nil {
-			return false
+	if hsm.execution.Load() == InTransit {
+		heap.Push(&hsm.queue, event)
+		return false
+	}
+	hsm.execution.Store(InTransit)
+	defer hsm.execution.Store(InState)
+	for event != nil {
+		state := hsm.state.QualifiedName()
+		for state != "/" {
+			source := get[elements.Vertex](hsm.model, state)
+			if source == nil {
+				return false
+			}
+			if transition := hsm.enabled(source, event); transition != nil {
+				hsm.state = hsm.transition(hsm.state, transition, event)
+				return true
+			}
+			state = source.Owner()
 		}
-		for _, transitionQualifiedName := range source.Transitions() {
-			transition := get[*transition](hsm.model, transitionQualifiedName)
-			if transition == nil {
-				continue
-			}
-			if _, ok := transition.Events()[event.Name()]; !ok {
-				continue
-			}
-			if guard := get[*constraint[T]](hsm.model, transition.Guard()); guard != nil {
-				if !hsm.evaluate(guard, event) {
-					continue
-				}
-			}
-			hsm.state = hsm.transition(hsm.state, transition, event)
-			return true
+		if hsm.queue.Len() == 0 {
+			break
 		}
-		state = source.Owner()
+		event = heap.Pop(&hsm.queue).(Event)
 	}
 	return false
 }
 
-func (sm *HSM[T]) DispatchAll(event AnyEvent) {
+func (sm *HSM[T]) DispatchAll(event Event) {
 	active, ok := sm.Value(contextKey).(*sync.Map)
 	if !ok {
 		return
 	}
 	active.Range(func(value any, _ any) bool {
-		sm, ok := value.(elements.StateMachine)
+		sm, ok := value.(elements.Context[T])
 		if !ok {
 			return true
 		}
