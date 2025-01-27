@@ -59,13 +59,13 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 	if kinds.IsKind(state.Kind(), kinds.State) {
 		state := state.(elements.State)
 		if entry := state.Entry(); entry != "" {
-			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(entry)))
+			fmt.Fprintf(builder, "%sstate %s: entry / %s\n", indent, id, idFromQualifiedName(path.Base(entry)))
 		}
 		if activity := state.Activity(); activity != "" {
-			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(activity)))
+			fmt.Fprintf(builder, "%sstate %s: activity / %s\n", indent, id, idFromQualifiedName(path.Base(activity)))
 		}
 		if exit := state.Exit(); exit != "" {
-			fmt.Fprintf(builder, "%sstate %s: %s\n", indent, id, idFromQualifiedName(path.Base(exit)))
+			fmt.Fprintf(builder, "%sstate %s: exit / %s\n", indent, id, idFromQualifiedName(path.Base(exit)))
 		}
 	}
 }
