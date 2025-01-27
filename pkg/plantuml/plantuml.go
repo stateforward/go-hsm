@@ -90,7 +90,7 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 			for _, event := range transition.Events() {
 				names = append(names, event.Name())
 			}
-			label = fmt.Sprintf(": %s", strings.Join(names, "|"))
+			label = strings.Join(names, "|")
 		}
 	}
 	if guard := transition.Guard(); guard != "" {
@@ -98,6 +98,9 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 	}
 	if effect := transition.Effect(); effect != "" {
 		label = fmt.Sprintf("%s / %s", label, idFromQualifiedName(path.Base(effect)))
+	}
+	if label != "" {
+		label = fmt.Sprintf(" : %s", label)
 	}
 	target := transition.Target()
 	indent := strings.Repeat(" ", depth*2)

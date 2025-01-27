@@ -738,7 +738,7 @@ func After(duration time.Duration) Partial {
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
-		name := fmt.Sprintf("after_%d_%d%s", len(owner.(*transition).events), value, units)
+		name := fmt.Sprintf("after(%d%s)_%d", value, units, len(owner.(*transition).events))
 		owner.(*transition).events[name] = &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: name},
 			data:    duration,
