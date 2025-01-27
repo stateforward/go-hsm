@@ -52,10 +52,9 @@ type Behavior interface {
 	Action() any
 }
 
-type Context[T context.Context] interface {
+type Context interface {
 	Element
 	context.Context
 	Dispatch(event Event) bool
-	DispatchAll(event Event) chan struct{}
-	Storage() T
+	DispatchAll(event Event)
 }

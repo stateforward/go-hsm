@@ -1042,7 +1042,7 @@ func (sm *HSM[T]) DispatchAll(event Event) {
 		return
 	}
 	active.Range(func(value any, _ any) bool {
-		sm, ok := value.(elements.Context[T])
+		sm, ok := value.(elements.Context)
 		if !ok {
 			return true
 		}
