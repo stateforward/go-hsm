@@ -2,7 +2,7 @@ package hsm_test
 
 import (
 	"context"
-	"fmt"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -159,7 +159,7 @@ func TestHSM(t *testing.T) {
 		Context: context.Background(),
 		foo:     0,
 	}, &model)
-	fmt.Println(plantuml.Generate(&model))
+	plantuml.Generate(os.Stdout, &model)
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("Initial state is not /s/s2/s21/s211", "state", sm.State())
 	}

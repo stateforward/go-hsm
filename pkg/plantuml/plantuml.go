@@ -4,7 +4,7 @@ package plantuml
 
 import (
 	"fmt"
-	"log/slog"
+	"io"
 	"path"
 	"sort"
 	"strings"
@@ -32,7 +32,6 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 					composite = true
 					fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
 				}
-				slog.Info("generateVertex", "for", state.QualifiedName(), "element", element.QualifiedName())
 				generateVertex(builder, depth+1, element, model, allElements, visited)
 			}
 		}
@@ -92,9 +91,13 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 				names = append(names, event.Name())
 			}
 			label = fmt.Sprintf(": %s", strings.Join(names, "|"))
-		} else {
-			label = ": " + transition.Name()
 		}
+	}
+	if guard := transition.Guard(); guard != "" {
+		label = fmt.Sprintf("%s [%s]", label, idFromQualifiedName(path.Base(guard)))
+	}
+	if effect := transition.Effect(); effect != "" {
+		label = fmt.Sprintf("%s / %s", label, idFromQualifiedName(path.Base(effect)))
 	}
 	target := transition.Target()
 	indent := strings.Repeat(" ", depth*2)
@@ -127,8 +130,7 @@ func generateElements(builder *strings.Builder, depth int, model elements.Model,
 	fmt.Fprintln(builder, "@enduml")
 }
 
-func Generate(model elements.Model) string {
-
+func Generate(writer io.Writer, model elements.Model) error {
 	var builder strings.Builder
 	elements := []elements.Element{}
 	for _, element := range model.Elements() {
@@ -156,6 +158,6 @@ func Generate(model elements.Model) string {
 	})
 
 	generateElements(&builder, 0, model, elements, map[string]any{})
-	slog.Info("Generate", "builder", builder.String())
-	return builder.String()
+	_, err := writer.Write([]byte(builder.String()))
+	return err
 }
