@@ -457,7 +457,7 @@ func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName .
 			slog.Error("effect must be called within a Transition")
 			panic(fmt.Errorf("effect must be called within a Transition"))
 		}
-		name := ".entry"
+		name := ".effect"
 		if len(maybeName) > 0 {
 			name = maybeName[0]
 		}
@@ -512,8 +512,8 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 				target = any(elementOrName).(string)
 			}
 		case Partial:
-			any(elementOrName).(Partial)(model, stack)
-			if maybeTarget := find(stack, kinds.State, kinds.Choice); maybeTarget != nil {
+			maybeTarget := any(elementOrName).(Partial)(model, stack)
+			if maybeTarget != nil {
 				target = maybeTarget.QualifiedName()
 			}
 		}

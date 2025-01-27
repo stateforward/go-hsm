@@ -1,8 +1,11 @@
+// TODO: This code is hacked together and needs to be refactored.
+// It generates PlantUML diagrams but the structure and organization could be improved.
 package plantuml
 
 import (
 	"fmt"
 	"log/slog"
+	"path"
 	"sort"
 	"strings"
 
@@ -14,11 +17,7 @@ func idFromQualifiedName(qualifiedName string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(qualifiedName, "/"), ".", "_"), "/", ".")
 }
 
-func labelFromName(name string) string {
-	return strings.TrimPrefix(name, ".")
-}
-
-func generateState(builder *strings.Builder, depth int, state elements.Element, allElements []elements.Element, visited map[string]any) {
+func generateState(builder *strings.Builder, depth int, state elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
 	id := idFromQualifiedName(state.QualifiedName())
 	indent := strings.Repeat(" ", depth*2)
 	composite := false
@@ -34,18 +33,18 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 					fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
 				}
 				slog.Info("generateVertex", "for", state.QualifiedName(), "element", element.QualifiedName())
-				generateVertex(builder, depth+1, element, allElements, visited)
-			} else if kinds.IsKind(element.Kind(), kinds.Transition) {
-
-				transition := element.(elements.Transition)
-				if strings.HasSuffix(transition.Source(), ".initial") {
-					if !composite {
-						composite = true
-						fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
-					}
-					generateTransition(builder, depth+1, transition, allElements, visited)
-				}
+				generateVertex(builder, depth+1, element, model, allElements, visited)
 			}
+		}
+	}
+	initial, ok := model.Elements()[path.Join(state.QualifiedName(), ".initial")]
+	if ok {
+		if !composite {
+			composite = true
+			fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
+		}
+		if transition, ok := model.Elements()[initial.(elements.Vertex).Transitions()[0]]; ok {
+			generateTransition(builder, depth+1, transition.(elements.Transition), allElements, visited)
 		}
 	}
 	if composite {
@@ -59,9 +58,9 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 	}
 }
 
-func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, allElements []elements.Element, visited map[string]any) {
+func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
 	if kinds.IsKind(vertex.Kind(), kinds.State) {
-		generateState(builder, depth, vertex, allElements, visited)
+		generateState(builder, depth, vertex, model, allElements, visited)
 	}
 }
 
@@ -88,14 +87,19 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 	fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), events)
 }
 
-func generateElements(builder *strings.Builder, depth int, allElements []elements.Element, visited map[string]any) {
+func generateElements(builder *strings.Builder, depth int, model elements.Model, allElements []elements.Element, visited map[string]any) {
 	fmt.Fprintln(builder, "@startuml")
 	for _, element := range allElements {
 		if _, ok := visited[element.QualifiedName()]; ok {
 			continue
 		}
 		if kinds.IsKind(element.Kind(), kinds.State, kinds.Choice) {
-			generateState(builder, depth+1, element, allElements, visited)
+			generateState(builder, depth+1, element, model, allElements, visited)
+		}
+	}
+	if initial, ok := model.Elements()[path.Join(model.QualifiedName(), ".initial")]; ok {
+		if transition, ok := model.Elements()[initial.(elements.Vertex).Transitions()[0]]; ok {
+			generateTransition(builder, depth, transition.(elements.Transition), allElements, visited)
 		}
 	}
 	for _, element := range allElements {
@@ -137,7 +141,7 @@ func Generate(model elements.Model) string {
 		return len(iPath) < len(jPath)
 	})
 
-	generateElements(&builder, 0, elements, map[string]any{})
+	generateElements(&builder, 0, model, elements, map[string]any{})
 	slog.Info("Generate", "builder", builder.String())
 	return builder.String()
 }
