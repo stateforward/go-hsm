@@ -696,12 +696,31 @@ func Trigger(events ...string) Partial {
 }
 
 func After(duration time.Duration) Partial {
+	units := ""
+	value := 0
+	switch {
+	case duration < time.Millisecond:
+		units = "µs"
+		value = int(duration.Microseconds())
+	case duration < time.Second:
+		units = "ms"
+		value = int(duration.Milliseconds())
+	case duration < time.Minute:
+		units = "s"
+		value = int(duration.Seconds())
+	case duration < time.Hour:
+		units = "m"
+		value = int(duration.Minutes())
+	case duration < time.Hour:
+		units = "s"
+		value = int(duration.Seconds())
+	}
 	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
-		name := fmt.Sprintf("after_%fs_%d", duration.Seconds(), len(owner.(*transition).events))
+		name := fmt.Sprintf("after_%d_%d%s", len(owner.(*transition).events), value, units)
 		owner.(*transition).events[name] = &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: name},
 			data:    duration,
