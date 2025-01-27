@@ -1,0 +1,27 @@
+@startuml
+  state s{
+    state s.s1{
+      state s.s1.s11{
+      }
+    }
+    state s.s2{
+      state s.s2.s21{
+        state s.s2.s21.s211
+      }
+    }
+  }
+  state s.s1.s11.choice_65 <<choice>>
+s.s1.s11.choice_65 ----> s.s1
+s.s1.s11.choice_65 ----> s.s2
+s.s1 ----> s.s1: A
+s.s2.s21.s211 ----> s.s1.s11: G
+s.s2.s21 ----> s.s2.s21: A
+s.s2 ----> s.s1: C
+s.s1.s11 ----> s.s1: D
+s.s1 ----> s: D
+s.s1 ----> s.s2: C
+s ----> s.s1.s11: E
+s.s1.s11 ----> s.s2.s21.s211: G
+s.s2.s21.s211 ----> s.s1.s11: after-0
+s.s1.s11 ----> s.s1.s11.choice_65: H
+@enduml

@@ -8,7 +8,6 @@ import (
 
 	"github.com/stateforward/go-hsm/elements"
 	"github.com/stateforward/go-hsm/kinds"
-	"github.com/stateforward/go-hsm/pkg/set"
 )
 
 func idFromQualifiedName(qualifiedName string) string {
@@ -19,13 +18,13 @@ func labelFromName(name string) string {
 	return strings.TrimPrefix(name, ".")
 }
 
-func generateState(builder *strings.Builder, depth int, state elements.Element, allElements []elements.Element, visited set.Set[string]) {
+func generateState(builder *strings.Builder, depth int, state elements.Element, allElements []elements.Element, visited map[string]any) {
 	id := idFromQualifiedName(state.QualifiedName())
 	indent := strings.Repeat(" ", depth*2)
 	composite := false
-	visited.Add(state.QualifiedName())
+	visited[state.QualifiedName()] = struct{}{}
 	for _, element := range allElements {
-		if visited.Contains(element.QualifiedName()) {
+		if _, ok := visited[element.QualifiedName()]; ok {
 			continue
 		}
 		if element.Owner() == state.QualifiedName() {
@@ -60,14 +59,14 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 	}
 }
 
-func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, allElements []elements.Element, visited set.Set[string]) {
+func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, allElements []elements.Element, visited map[string]any) {
 	if kinds.IsKind(vertex.Kind(), kinds.State) {
 		generateState(builder, depth, vertex, allElements, visited)
 	}
 }
 
-func generateTransition(builder *strings.Builder, depth int, transition elements.Transition, _ []elements.Element, visited set.Set[string]) {
-	visited.Add(transition.QualifiedName())
+func generateTransition(builder *strings.Builder, depth int, transition elements.Transition, _ []elements.Element, visited map[string]any) {
+	visited[transition.QualifiedName()] = struct{}{}
 	if kinds.IsKind(transition.Kind(), kinds.Internal) {
 		return
 	}
@@ -89,10 +88,10 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 	fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), events)
 }
 
-func generateElements(builder *strings.Builder, depth int, allElements []elements.Element, visited set.Set[string]) {
+func generateElements(builder *strings.Builder, depth int, allElements []elements.Element, visited map[string]any) {
 	fmt.Fprintln(builder, "@startuml")
 	for _, element := range allElements {
-		if visited.Contains(element.QualifiedName()) {
+		if _, ok := visited[element.QualifiedName()]; ok {
 			continue
 		}
 		if kinds.IsKind(element.Kind(), kinds.State, kinds.Choice) {
@@ -138,7 +137,7 @@ func Generate(model elements.Model) string {
 		return len(iPath) < len(jPath)
 	})
 
-	generateElements(&builder, 0, elements, set.New[string]())
+	generateElements(&builder, 0, elements, map[string]any{})
 	slog.Info("Generate", "builder", builder.String())
 	return builder.String()
 }
