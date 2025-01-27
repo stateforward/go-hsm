@@ -460,7 +460,7 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 		case string:
 			qualifiedName = target
 			if !path.IsAbs(qualifiedName) {
-				if ancestor := find(stack, kinds.State, kinds.StateMachine); ancestor != nil {
+				if ancestor := find(stack, kinds.State); ancestor != nil {
 					qualifiedName = path.Join(ancestor.QualifiedName(), qualifiedName)
 				}
 			}
@@ -535,7 +535,7 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 			element: element{kind: kinds.Initial, qualifiedName: path.Join(owner.QualifiedName(), ".initial")},
 		}
 		if model.elements[initial.QualifiedName()] != nil {
-			panic(fmt.Errorf("Initial state already exists"))
+			panic(fmt.Errorf("initial state already exists"))
 		}
 		var target string
 		switch any(elementOrName).(type) {
@@ -701,7 +701,7 @@ func After(duration time.Duration) Partial {
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
-		name := fmt.Sprintf("after-%d", len(owner.(*transition).events))
+		name := fmt.Sprintf("after_%fs_%d", duration.Seconds(), len(owner.(*transition).events))
 		owner.(*transition).events[name] = &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: name},
 			data:    duration,
