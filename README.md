@@ -1,5 +1,8 @@
 # go-hsm [![PkgGoDev](https://pkg.go.dev/badge/github.com/stateforward/go-hsm)](https://pkg.go.dev/github.com/stateforward/go-hsm)
 
+> **Warning**
+> This package is currently in alpha stage. While it has test coverage, the API is subject to breaking changes between minor versions until we reach v1.0.0. Please pin your dependencies to specific versions.
+
 Package go-hsm provides a powerful hierarchical state machine (HSM) implementation for Go. State machines help manage complex application states and transitions in a clear, maintainable way.
 
 ## Key Features
@@ -10,6 +13,10 @@ Package go-hsm provides a powerful hierarchical state machine (HSM) implementati
 - Event-driven transitions
 - Time-based transitions
 - Context and storage support
+- Choice pseudo-states for dynamic branching
+- Concurrent state execution
+- Event queuing with completion event priority
+- Multiple state machine instances with broadcast support
 
 
 ## Roadmap
@@ -23,6 +30,9 @@ Current and planned features:
 - [x] Guard conditions
 - [x] Transition effects
 - [x] Custom storage context
+- [x] Choice pseudo-states
+- [x] Event broadcasting
+- [x] Concurrent activities
 - [ ] Scheduled transitions (at specific dates/times)
    ```go
    hsm.Transition(
@@ -73,12 +83,12 @@ States can have three types of actions:
 ```go
 hsm.State("active",
     // Entry action - runs once when state is entered
-    hsm.Entry(func(ctx hsm.Context[*storage], event AnyEvent) {
+    hsm.Entry(func(ctx hsm.Context[*storage], event hsm.Event) {
         log.Println("Entering active state")
     }),
     
     // Activity action - can run long-running operations
-    hsm.Activity(func(ctx hsm.Context[*storage], event AnyEvent) {
+    hsm.Activity(func(ctx hsm.Context[*storage], event hsm.Event) {
         // Will be cancelled when state is exited
         select {
         case <-ctx.Done():
@@ -89,10 +99,49 @@ hsm.State("active",
     }),
     
     // Exit action - runs when leaving the state
-    hsm.Exit(func(ctx hsm.Context[*storage], event AnyEvent) {
+    hsm.Exit(func(ctx hsm.Context[*storage], event hsm.Event) {
         log.Println("Exiting active state")
     })
 )
+```
+
+## Choice States
+
+Choice pseudo-states allow dynamic branching based on conditions:
+
+```go
+hsm.State("processing",
+    hsm.Transition(
+        hsm.Trigger("decide"),
+        hsm.Target(
+            hsm.Choice(
+                // First matching guard wins
+                hsm.Transition(
+                    hsm.Target("approved"),
+                    hsm.Guard(func(ctx hsm.Context[*storage], event hsm.Event) bool {
+                        return ctx.Storage().score > 700
+                    }),
+                ),
+                // Default transition (no guard)
+                hsm.Transition(
+                    hsm.Target("rejected")
+                ),
+            ),
+        ),
+    ),
+)
+```
+
+## Event Broadcasting
+
+Multiple state machine instances can receive broadcasted events:
+
+```go
+sm1 := hsm.New(context.Background(), &model)
+sm2 := hsm.New(context.Background(), &model)
+
+// Dispatch event to all state machines
+sm1.DispatchAll(hsm.NewEvent("globalEvent"))
 ```
 
 ## Transitions
