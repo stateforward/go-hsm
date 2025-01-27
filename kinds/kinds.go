@@ -71,8 +71,8 @@ var (
 	CompletionEvent = Kind(14, Event)
 	TimeEvent       = Kind(15, Event)
 
-	PseudoState = Kind(16, Vertex)
-	Initial     = Kind(17, PseudoState)
-	Final       = Kind(18, PseudoState)
-	Choice      = Kind(19, PseudoState)
+	Pseudostate = Kind(16, Vertex)
+	Initial     = Kind(17, Pseudostate)
+	Final       = Kind(18, Pseudostate)
+	Choice      = Kind(19, Pseudostate)
 )

@@ -2,13 +2,11 @@ package hsm_test
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/stateforward/go-hsm"
-	"github.com/stateforward/go-hsm/pkg/plantuml"
 )
 
 type Trace struct {
@@ -108,9 +106,15 @@ func TestHSM(t *testing.T) {
 				hsm.Initial("s21/s211", hsm.Effect(mockAction("s2.initial.effect", false))),
 				hsm.Transition(hsm.Trigger("C"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s2.C.transition.effect", false))),
 			),
+			hsm.State("s3",
+				hsm.Entry(mockAction("s3.entry", false)),
+				hsm.Activity(mockAction("s3.activity", true)),
+				hsm.Exit(mockAction("s3.exit", false)),
+			),
 		),
 		hsm.Initial(
 			hsm.Choice(
+				"initial_choice",
 				hsm.Transition(hsm.Target("/s/s2")),
 			), hsm.Effect(mockAction("initial.effect", false))),
 		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1"), hsm.Target("/s"), hsm.Effect(mockAction("s1.D.transition.effect", false)), hsm.Guard(
@@ -144,16 +148,16 @@ func TestHSM(t *testing.T) {
 		), hsm.Effect(mockAction("s11.H.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx hsm.Context[*storage], event hsm.Event) {
 			trace.async = append(trace.async, "s11.J.transition.effect")
-			go ctx.Dispatch(hsm.NewEvent("K"))
+			ctx.Dispatch(hsm.NewEvent("K"))
 		})),
-		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
+		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
+		hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
 	)
 	sm := hsm.New(&storage{
 		Context: context.Background(),
 		foo:     0,
 	}, &model)
 
-	fmt.Println(plantuml.Generate(&model))
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("Initial state is not /s/s2/s21/s211", "state", sm.State())
 	}
@@ -323,16 +327,17 @@ func TestHSM(t *testing.T) {
 		t.Fatal("event J not handled")
 	}
 	time.Sleep(time.Second)
-	if sm.State() != "/s" {
+	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
 	trace.reset()
+
 	sm.Terminate()
 	if sm.State() != "" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
 	if !trace.matches(Trace{
-		sync: []string{"s.exit"},
+		sync: []string{"s3.exit", "s.exit"},
 	}) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}

@@ -19,7 +19,7 @@ func TestKinds(t *testing.T) {
 	if kinds.IsKind(kinds.State, kinds.Behavior) {
 		t.Errorf("State should not be a Behavior")
 	}
-	if !kinds.IsKind(kinds.Choice, kinds.PseudoState) {
+	if !kinds.IsKind(kinds.Choice, kinds.Pseudostate) {
 		t.Errorf("Choice should be a PseudoState")
 	}
 	if !kinds.IsKind(kinds.Choice, kinds.Vertex) {

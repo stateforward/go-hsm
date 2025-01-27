@@ -139,6 +139,7 @@ type constraint[T context.Context] struct {
 /******* Active *******/
 
 type active struct {
+	context context.Context
 	channel chan struct{}
 	cancel  context.CancelFunc
 }
@@ -328,11 +329,14 @@ func Transition(partialElements ...Partial) Partial {
 		case *vertex:
 			source.transitions = append(source.transitions, transition.QualifiedName())
 		}
-		if len(transition.events) == 0 && !kinds.IsKind(sourceElement.Kind(), kinds.Initial, kinds.Choice) {
+		if len(transition.events) == 0 && !kinds.IsKind(sourceElement.Kind(), kinds.Pseudostate) {
 
 			// completion transition
-			slog.Error("completion transition not implemented", "source", transition.source, "target", transition.target)
-			panic(fmt.Errorf("completion transition not implemented"))
+			qualifiedName := path.Join(transition.source, ".completion")
+			transition.events[qualifiedName] = &event{
+				element: element{kind: kinds.CompletionEvent, qualifiedName: qualifiedName},
+			}
+			// panic(fmt.Errorf("completion transition not implemented"))
 		}
 		var kind uint64
 		if transition.target == transition.source {
@@ -527,7 +531,14 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 	}
 }
 
-func Choice(partialElements ...Partial) Partial {
+func Choice[T interface{ Partial | string }](elementOrName T, partialElements ...Partial) Partial {
+	name := ""
+	switch any(elementOrName).(type) {
+	case string:
+		name = any(elementOrName).(string)
+	case Partial:
+		partialElements = append([]Partial{any(elementOrName).(Partial)}, partialElements...)
+	}
 	return func(builder *Builder, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State, kinds.Transition)
 		if owner == nil {
@@ -540,7 +551,10 @@ func Choice(partialElements ...Partial) Partial {
 				panic(fmt.Errorf("missing source %s", source))
 			}
 		}
-		qualifiedName := path.Join(owner.QualifiedName(), fmt.Sprintf("choice_%d", len(builder.elements)))
+		if name == "" {
+			name = fmt.Sprintf("choice_%d", len(builder.elements))
+		}
+		qualifiedName := path.Join(owner.QualifiedName(), name)
 		element := &vertex{
 			element: element{kind: kinds.Choice, qualifiedName: qualifiedName},
 		}
@@ -769,6 +783,17 @@ func (hsm *HSM[T]) Terminate() {
 	}
 }
 
+func (hsm *HSM[T]) activate(element elements.Element) *active {
+	current, ok := hsm.active[element.QualifiedName()]
+	if !ok {
+		current = &active{}
+		hsm.active[element.QualifiedName()] = current
+	}
+	current.context, current.cancel = context.WithCancel(hsm)
+	current.channel = make(chan struct{})
+	return current
+}
+
 func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry bool) elements.Element {
 	if hsm == nil {
 		return nil
@@ -788,14 +813,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 				for _, event := range element.Events() {
 					switch event.Kind() {
 					case kinds.TimeEvent:
-						current, ok := hsm.active[event.QualifiedName()]
-						if !ok {
-							current = &active{}
-							hsm.active[event.QualifiedName()] = current
-						}
-						var ctx context.Context
-						ctx, current.cancel = context.WithCancel(hsm)
-						current.channel = make(chan struct{})
+						active := hsm.activate(element)
 						go func(ctx context.Context, channel chan struct{}) {
 							timer := time.NewTimer(event.Data().(time.Duration))
 							defer timer.Stop()
@@ -811,7 +829,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 									return
 								}
 							}
-						}(ctx, current.channel)
+						}(active.context, active.channel)
 					}
 				}
 			}
@@ -1020,11 +1038,11 @@ func (hsm *HSM[T]) Dispatch(event Event) bool {
 		for state != "/" {
 			source := get[elements.Vertex](hsm.model, state)
 			if source == nil {
-				return false
+				break
 			}
 			if transition := hsm.enabled(source, event); transition != nil {
 				hsm.state = hsm.transition(hsm.state, transition, event)
-				return true
+				break
 			}
 			state = source.Owner()
 		}
@@ -1033,7 +1051,7 @@ func (hsm *HSM[T]) Dispatch(event Event) bool {
 		}
 		event = heap.Pop(&hsm.queue).(Event)
 	}
-	return false
+	return true
 }
 
 func (sm *HSM[T]) DispatchAll(event Event) {
