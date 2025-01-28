@@ -732,7 +732,6 @@ func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
-		slog.Info("after", "qualifiedName", qualifiedName)
 		owner.(*transition).events[qualifiedName] = &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
 			data:    expr,
@@ -779,21 +778,12 @@ type HSM[T context.Context] struct {
 	active    map[string]*active
 	queue     queue
 	execution atomic.Uint32
-	storage   T
+	Storage   T
 }
 
 type Context[T context.Context] struct {
 	context.Context
-	hsm     *HSM[T]
-	Storage T
-}
-
-func (ctx Context[T]) Dispatch(event Event) bool {
-	return ctx.hsm.Dispatch(event)
-}
-
-func (ctx Context[T]) DispatchAll(event Event) {
-	ctx.hsm.DispatchAll(event)
+	*HSM[T]
 }
 
 var contextKey = unique.Make("context")
@@ -808,7 +798,7 @@ func New[T context.Context](ctx T, model *model) *HSM[T] {
 		},
 		model:   model,
 		active:  map[string]*active{},
-		storage: ctx,
+		Storage: ctx,
 	}
 	all, ok := ctx.Value(contextKey).(*sync.Map)
 	if !ok {
@@ -833,10 +823,6 @@ func (hsm *HSM[T]) State() string {
 		return ""
 	}
 	return hsm.state.QualifiedName()
-}
-
-func (hsm *HSM[T]) Storage() T {
-	return hsm.storage
 }
 
 func (hsm *HSM[T]) Terminate() {
@@ -888,8 +874,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 							duration := event.Data().(func(hsm Context[T]) time.Duration)(
 								Context[T]{
 									Context: ctx,
-									hsm:     hsm,
-									Storage: hsm.storage,
+									HSM:     hsm,
 								},
 							)
 							timer := time.NewTimer(duration)
@@ -996,16 +981,14 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 		go func(channel chan struct{}) {
 			element.action(Context[T]{
 				Context: ctx,
-				hsm:     hsm,
-				Storage: hsm.storage,
+				HSM:     hsm,
 			}, event)
 			close(channel)
 		}(current.channel)
 	default:
 		element.action(Context[T]{
 			Context: hsm.Context,
-			hsm:     hsm,
-			Storage: hsm.storage,
+			HSM:     hsm,
 		}, event)
 
 	}
@@ -1019,8 +1002,7 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	return guard.expression(
 		Context[T]{
 			Context: hsm.Context,
-			hsm:     hsm,
-			Storage: hsm.storage,
+			HSM:     hsm,
 		},
 		event,
 	)

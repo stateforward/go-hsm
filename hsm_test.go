@@ -50,6 +50,10 @@ type storage struct {
 	foo int
 }
 
+type THSM struct {
+	*hsm.HSM[*storage]
+}
+
 func TestHSM(t *testing.T) {
 	trace := &Trace{}
 
@@ -161,10 +165,10 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
 		// hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
 	)
-	sm := hsm.New(&storage{
+	sm := THSM{hsm.New(&storage{
 		Context: context.Background(),
 		foo:     0,
-	}, &model)
+	}, &model)}
 	plantuml.Generate(os.Stdout, &model)
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("Initial state is not /s/s2/s21/s211", "state", sm.State())

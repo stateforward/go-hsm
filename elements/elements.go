@@ -55,9 +55,15 @@ type Behavior interface {
 	Action() any
 }
 
-type Context interface {
+type StateMachine interface {
 	Element
-	context.Context
+	State() string
 	Dispatch(event Event) bool
 	DispatchAll(event Event)
+	Terminate()
+}
+
+type Context interface {
+	StateMachine
+	context.Context
 }
