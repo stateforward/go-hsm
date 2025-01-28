@@ -24,7 +24,7 @@ type Transition interface {
 	Target() string
 	Guard() string
 	Effect() string
-	Events() map[string]Event
+	Events() []Event
 }
 
 type Vertex interface {

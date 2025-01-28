@@ -118,6 +118,7 @@ func TestHSM(t *testing.T) {
 				hsm.Activity(mockAction("s3.activity", true)),
 				hsm.Exit(mockAction("s3.exit", false)),
 			),
+			hsm.Transition(hsm.Trigger(`*/P/*`), hsm.Effect(mockAction("s11.P.transition.effect", false))),
 		),
 		hsm.Initial(
 			hsm.Choice(
@@ -344,6 +345,13 @@ func TestHSM(t *testing.T) {
 	}
 	trace.reset()
 
+	sm.Dispatch(hsm.NewEvent("K/P"))
+	if !trace.contains(Trace{
+		sync: []string{"s11.P.transition.effect"},
+	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
+	}
+	trace.reset()
 	sm.Terminate()
 	if sm.State() != "" {
 		t.Fatal("state is not correct", "state", sm.State())

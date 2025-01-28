@@ -121,7 +121,7 @@ type transition struct {
 	target string
 	guard  string
 	effect string
-	events map[string]elements.Event
+	events []elements.Event
 	paths  map[string]paths
 }
 
@@ -133,7 +133,7 @@ func (transition *transition) Effect() string {
 	return transition.effect
 }
 
-func (transition *transition) Events() map[string]elements.Event {
+func (transition *transition) Events() []elements.Event {
 	return transition.events
 }
 
@@ -335,7 +335,7 @@ func Transition[T interface{ Partial | string }](nameOrPartialElement T, partial
 			name = fmt.Sprintf("transition_%d", len(builder.elements))
 		}
 		transition := &transition{
-			events: map[string]elements.Event{},
+			events: []elements.Event{},
 			element: element{
 				kind:          kinds.Transition,
 				qualifiedName: path.Join(owner.QualifiedName(), name),
@@ -363,9 +363,9 @@ func Transition[T interface{ Partial | string }](nameOrPartialElement T, partial
 
 			// TODO: completion transition
 			qualifiedName := path.Join(transition.source, ".completion")
-			transition.events[qualifiedName] = &event{
+			transition.events = append(transition.events, &event{
 				element: element{kind: kinds.CompletionEvent, qualifiedName: qualifiedName},
-			}
+			})
 			panic(fmt.Errorf("completion transition not implemented"))
 		}
 		var kind uint64
@@ -709,12 +709,12 @@ func Trigger[T interface{ string | *event }](events ...T) Partial {
 			switch any(eventOrName).(type) {
 			case string:
 				name := any(eventOrName).(string)
-				transition.events[name] = &event{
+				transition.events = append(transition.events, &event{
 					element: element{kind: kinds.Event, qualifiedName: name},
-				}
+				})
 			case *event:
 				event := any(eventOrName).(*event)
-				transition.events[event.QualifiedName()] = event
+				transition.events = append(transition.events, event)
 			}
 		}
 		return owner
@@ -732,10 +732,10 @@ func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
-		owner.(*transition).events[qualifiedName] = &event{
+		owner.(*transition).events = append(owner.(*transition).events, &event{
 			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
 			data:    expr,
-		}
+		})
 		return owner
 	}
 }
@@ -1069,15 +1069,17 @@ func (hsm *HSM[T]) enabled(source elements.Vertex, event Event) *transition {
 		if transition == nil {
 			continue
 		}
-		if _, ok := transition.Events()[event.Name()]; !ok {
-			continue
-		}
-		if guard := get[*constraint[T]](hsm.model, transition.Guard()); guard != nil {
-			if !hsm.evaluate(guard, event) {
+		for _, evt := range transition.Events() {
+			if matched, err := path.Match(evt.Name(), event.Name()); err != nil || !matched {
 				continue
 			}
+			if guard := get[*constraint[T]](hsm.model, transition.Guard()); guard != nil {
+				if !hsm.evaluate(guard, event) {
+					continue
+				}
+			}
+			return transition
 		}
-		return transition
 	}
 	return nil
 }
