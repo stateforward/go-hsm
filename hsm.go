@@ -302,24 +302,58 @@ func State(name string, partialElements ...RedifinableElement) RedifinableElemen
 	}
 }
 
-// lca finds the Lowest Common Ancestor between two qualified state names in a hierarchical state machine.
+// LCA finds the Lowest Common Ancestor between two qualified state names in a hierarchical state machine.
 // It takes two qualified names 'a' and 'b' as strings and returns their closest common ancestor.
 //
 // For example:
-// - lca("/s/s1", "/s/s2") returns "/s"
-// - lca("/s/s1", "/s/s1/s11") returns "/s/s1"
-// - lca("/s/s1", "/s/s1") returns "/s/s1"
-func lca(a, b string) string {
+// - LCA("/s/s1", "/s/s2") returns "/s"
+// - LCA("/s/s1", "/s/s1/s11") returns "/s/s1"
+// - LCA("/s/s1", "/s/s1") returns "/s/s1"
+func LCA(a, b string) string {
+	// if both are the same the lca is the parent
 	if a == b {
-		return a
+		return path.Dir(a)
 	}
-	if strings.HasPrefix(a, b) {
+	// if one is empty the lca is the other
+	if a == "" {
 		return b
 	}
-	if strings.HasPrefix(b, a) {
+	if b == "" {
 		return a
 	}
-	return lca(path.Dir(a), path.Dir(b))
+	// if the parents are the same the lca is the parent
+	if path.Dir(a) == path.Dir(b) {
+		return path.Dir(a)
+	}
+	// if a is an ancestor of b the lca is a
+	if IsAncestor(a, b) {
+		return a
+	}
+	// if b is an ancestor of a the lca is b
+	if IsAncestor(b, a) {
+		return b
+	}
+	// otherwise the lca is the lca of the parents
+	return LCA(path.Dir(a), path.Dir(b))
+}
+
+func IsAncestor(current, target string) bool {
+	current = path.Clean(current)
+	target = path.Clean(target)
+	if current == target || current == "." || target == "." {
+		return false
+	}
+	if current == "/" {
+		return true
+	}
+	parent := path.Dir(target)
+	for parent != "/" {
+		if parent == current {
+			return true
+		}
+		parent = path.Dir(parent)
+	}
+	return false
 }
 
 func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement T, partialElements ...RedifinableElement) RedifinableElement {
@@ -377,7 +411,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 			kind = kinds.Self
 		} else if transition.target == "" {
 			kind = kinds.Internal
-		} else if match, err := path.Match(string(transition.source)+"/*", string(transition.target)); err == nil && match {
+		} else if IsAncestor(transition.source, transition.target) {
 			kind = kinds.Local
 		} else {
 			kind = kinds.External
@@ -385,7 +419,8 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 		transition.kind = kind
 		enter := []string{}
 		entering := transition.target
-		for !strings.HasPrefix(transition.source, entering) && entering != "/" && entering != "" {
+		lca := LCA(transition.source, transition.target)
+		for entering != lca && entering != "/" && entering != "" {
 			enter = append([]string{entering}, enter...)
 			entering = path.Dir(entering)
 		}
@@ -405,13 +440,9 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 						exit := []string{}
 						if kind != kinds.Internal {
 							exiting := element.QualifiedName()
-							lca := lca(transition.source, transition.target)
-							for exiting != lca {
+							for exiting != lca && exiting != "/" && exiting != "" {
 								exit = append(exit, exiting)
 								exiting = path.Dir(exiting)
-							}
-							if kinds.IsKind(transition.kind, kinds.Self) {
-								exit = append(exit, sourceElement.QualifiedName())
 							}
 						}
 						transition.paths[element.QualifiedName()] = paths{

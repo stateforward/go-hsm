@@ -9,12 +9,6 @@ import (
 
 	"github.com/stateforward/go-hsm"
 	"github.com/stateforward/go-hsm/pkg/plantuml"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 )
 
 type Trace struct {
@@ -60,38 +54,7 @@ type THSM struct {
 	*hsm.HSM[*storage]
 }
 
-var headers = map[string]string{
-	"content-type": "application/json",
-}
-
-var exporter, _ = otlptrace.New(
-	context.Background(),
-	otlptracehttp.NewClient(
-		otlptracehttp.WithEndpoint("localhost:4318"),
-		otlptracehttp.WithHeaders(headers),
-		otlptracehttp.WithInsecure(),
-	),
-)
-var provider = trace.NewTracerProvider(
-	trace.WithBatcher(
-		exporter,
-		trace.WithMaxExportBatchSize(trace.DefaultMaxExportBatchSize),
-		trace.WithBatchTimeout(trace.DefaultScheduleDelay*time.Millisecond),
-		trace.WithMaxExportBatchSize(trace.DefaultMaxExportBatchSize),
-	),
-	trace.WithResource(
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String("hsm-test"),
-		),
-	),
-)
-
 func TestHSM(t *testing.T) {
-	otel.SetTracerProvider(provider)
-	tracer := provider.Tracer("github.com/stateforward/go-hsm")
-	_, span := tracer.Start(context.Background(), "test")
-	span.End()
 	trace := &Trace{}
 
 	mockAction := func(name string, async bool) func(ctx hsm.Context[*storage], event hsm.Event) {
@@ -201,7 +164,6 @@ func TestHSM(t *testing.T) {
 			ctx.Dispatch(hsm.NewEvent("K"))
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
-		hsm.Telemetry(provider),
 
 		// hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
 	)
@@ -383,7 +345,6 @@ func TestHSM(t *testing.T) {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
 	trace.reset()
-
 	sm.Dispatch(hsm.NewEvent("K.P.A"))
 	if !trace.contains(Trace{
 		sync: []string{"s11.P.transition.effect"},
@@ -400,7 +361,6 @@ func TestHSM(t *testing.T) {
 	}) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
-	provider.ForceFlush(context.Background())
 }
 
 func TestHSMDispatchAll(t *testing.T) {
@@ -428,6 +388,51 @@ func TestHSMDispatchAll(t *testing.T) {
 }
 func noBehavior(hsm hsm.Context[context.Context], event hsm.Event) {
 
+}
+
+func TestIsAncestor(t *testing.T) {
+	if !hsm.IsAncestor("/foo/bar", "/foo/bar/baz") {
+		t.Fatal("IsAncestor is not correct /foo/bar is an ancestor of /foo/bar/baz")
+	}
+	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar")
+	}
+	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar/baz")
+	}
+	if !hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is an ancestor of /foo/bar/baz/qux")
+	}
+	if !hsm.IsAncestor("/", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct / is an ancestor of /foo/bar/baz/qux")
+	}
+	if !hsm.IsAncestor("/foo/", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct /foo/ is an ancestor of /foo/bar/baz/qux")
+	}
+}
+
+func TestLCA(t *testing.T) {
+	if hsm.LCA("/foo/bar", "/foo/bar/baz") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar", "/foo/bar/baz"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux") != "/foo/bar/baz" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("/", "/foo/bar/baz/qux") != "/" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("", "/foo/bar/baz/qux") != "/foo/bar/baz/qux" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("/foo/bar/baz/qux", "") != "/foo/bar/baz/qux" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz/qux", ""))
+	}
 }
 
 // }
