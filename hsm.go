@@ -15,6 +15,8 @@ import (
 
 	"github.com/stateforward/go-hsm/elements"
 	"github.com/stateforward/go-hsm/kinds"
+	"github.com/stateforward/go-hsm/pkg/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 /******* Element *******/
@@ -54,27 +56,22 @@ func (element *element) QualifiedName() string {
 
 /******* Model *******/
 
-type model struct {
+type Model struct {
 	state
-	elements map[string]elements.Element
+	namespace map[string]elements.Element
+	elements  []RedifinableElement
+	telemetry trace.TracerProvider
 }
 
-func (model *model) Elements() map[string]elements.Element {
-	return model.elements
+func (model *Model) Namespace() map[string]elements.Element {
+	return model.namespace
 }
 
-/******* Builder *******/
-
-type Builder struct {
-	model
-	partials []Partial
+func (model *Model) Push(partial RedifinableElement) {
+	model.elements = append(model.elements, partial)
 }
 
-func (builder *Builder) Push(partial Partial) {
-	builder.partials = append(builder.partials, partial)
-}
-
-type Partial = func(model *Builder, stack []elements.Element) elements.Element
+type RedifinableElement = func(model *Model, stack []elements.Element) elements.Element
 
 /******* Vertex *******/
 
@@ -177,10 +174,16 @@ type event struct {
 }
 
 func (event *event) Name() string {
+	if event == nil {
+		return ""
+	}
 	return event.qualifiedName
 }
 
 func (event *event) Data() any {
+	if event == nil {
+		return nil
+	}
 	return event.data
 }
 
@@ -233,29 +236,30 @@ func (q *queue) Push(event any) {
 
 }
 
-func apply(model *Builder, stack []elements.Element, partials ...Partial) {
+func apply(model *Model, stack []elements.Element, partials ...RedifinableElement) {
 	for _, partial := range partials {
 		partial(model, stack)
 	}
 }
 
-func Model(partials ...Partial) model {
-	builder := Builder{
-		model: model{
-			state: state{
-				vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/"}, transitions: []string{}},
-			},
-			elements: map[string]elements.Element{},
+func Define(redifinableElements ...RedifinableElement) Model {
+	model := Model{
+		state: state{
+			vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/"}, transitions: []string{}},
 		},
-		partials: partials,
+		namespace: map[string]elements.Element{},
+		elements:  redifinableElements,
+		telemetry: telemetry.NewProvider(),
 	}
-	stack := []elements.Element{&builder}
-	for len(builder.partials) > 0 {
-		partials = builder.partials
-		builder.partials = []Partial{}
-		apply(&builder, stack, partials...)
+
+	stack := []elements.Element{&model}
+	for len(model.elements) > 0 {
+		elements := model.elements
+		model.elements = []RedifinableElement{}
+		apply(&model, stack, elements...)
 	}
-	return builder.model
+
+	return model
 }
 
 func find(stack []elements.Element, maybeKinds ...uint64) elements.Element {
@@ -267,12 +271,12 @@ func find(stack []elements.Element, maybeKinds ...uint64) elements.Element {
 	return nil
 }
 
-func get[T elements.Element](model *model, name string) T {
+func get[T elements.Element](model *Model, name string) T {
 	var zero T
 	if name == "" {
 		return zero
 	}
-	if element, ok := model.elements[name]; ok {
+	if element, ok := model.namespace[name]; ok {
 		typed, ok := element.(T)
 		if ok {
 			return typed
@@ -281,8 +285,8 @@ func get[T elements.Element](model *model, name string) T {
 	return zero
 }
 
-func State(name string, partialElements ...Partial) Partial {
-	return func(model *Builder, stack []elements.Element) elements.Element {
+func State(name string, partialElements ...RedifinableElement) RedifinableElement {
+	return func(graph *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.StateMachine, kinds.State)
 		if owner == nil {
 			slog.Error("state must be called within a StateMachine or State")
@@ -291,9 +295,9 @@ func State(name string, partialElements ...Partial) Partial {
 		element := &state{
 			vertex: vertex{element: element{kind: kinds.State, qualifiedName: path.Join(owner.QualifiedName(), name)}, transitions: []string{}},
 		}
-		model.elements[element.QualifiedName()] = element
+		graph.namespace[element.QualifiedName()] = element
 		stack = append(stack, element)
-		apply(model, stack, partialElements...)
+		apply(graph, stack, partialElements...)
 		return element
 	}
 }
@@ -318,21 +322,21 @@ func lca(a, b string) string {
 	return lca(path.Dir(a), path.Dir(b))
 }
 
-func Transition[T interface{ Partial | string }](nameOrPartialElement T, partialElements ...Partial) Partial {
+func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement T, partialElements ...RedifinableElement) RedifinableElement {
 	name := ""
 	switch any(nameOrPartialElement).(type) {
 	case string:
 		name = any(nameOrPartialElement).(string)
-	case Partial:
-		partialElements = append([]Partial{any(nameOrPartialElement).(Partial)}, partialElements...)
+	case RedifinableElement:
+		partialElements = append([]RedifinableElement{any(nameOrPartialElement).(RedifinableElement)}, partialElements...)
 	}
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Vertex)
 		if owner == nil {
 			panic(fmt.Errorf("transition must be called within a State or StateMachine"))
 		}
 		if name == "" {
-			name = fmt.Sprintf("transition_%d", len(builder.elements))
+			name = fmt.Sprintf("transition_%d", len(model.namespace))
 		}
 		transition := &transition{
 			events: []elements.Event{},
@@ -342,13 +346,13 @@ func Transition[T interface{ Partial | string }](nameOrPartialElement T, partial
 			},
 			paths: map[string]paths{},
 		}
-		builder.elements[transition.QualifiedName()] = transition
+		model.namespace[transition.QualifiedName()] = transition
 		stack = append(stack, transition)
-		apply(builder, stack, partialElements...)
+		apply(model, stack, partialElements...)
 		if transition.source == "" {
 			transition.source = owner.QualifiedName()
 		}
-		sourceElement, ok := builder.elements[transition.source]
+		sourceElement, ok := model.namespace[transition.source]
 		if !ok {
 			slog.Error("missing source", "id", transition.source)
 			panic(fmt.Errorf("missing source %s", transition.source))
@@ -394,9 +398,9 @@ func Transition[T interface{ Partial | string }](nameOrPartialElement T, partial
 				exit:  []string{sourceElement.QualifiedName()},
 			}
 		} else {
-			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
+			model.Push(func(model *Model, stack []elements.Element) elements.Element {
 				// precompute transition paths for the source state and nested states
-				for qualifiedName, element := range builder.elements {
+				for qualifiedName, element := range model.namespace {
 					if strings.HasPrefix(qualifiedName, transition.source) && kinds.IsKind(element.Kind(), kinds.Vertex, kinds.StateMachine) {
 						exit := []string{}
 						if kind != kinds.Internal {
@@ -425,8 +429,8 @@ func Transition[T interface{ Partial | string }](nameOrPartialElement T, partial
 	}
 }
 
-func Source[T interface{ Partial | string }](nameOrPartialElement T) Partial {
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("source must be called within a Transition"))
@@ -441,15 +445,15 @@ func Source[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 				}
 			}
 			// push a validation step to ensure the source exists after the model is built
-			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
-				if _, ok := builder.model.elements[name]; !ok {
+			model.Push(func(model *Model, stack []elements.Element) elements.Element {
+				if _, ok := model.namespace[name]; !ok {
 					slog.Error("missing source", "id", name)
 					panic(fmt.Errorf("missing source %s", name))
 				}
 				return owner
 			})
-		case Partial:
-			element := any(nameOrPartialElement).(Partial)(builder, stack)
+		case RedifinableElement:
+			element := any(nameOrPartialElement).(RedifinableElement)(model, stack)
 			if element == nil {
 				panic(fmt.Errorf("source is nil"))
 			}
@@ -460,12 +464,12 @@ func Source[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 	}
 }
 
-func Defer(events ...uint64) Partial {
+func Defer(events ...uint64) RedifinableElement {
 	panic("not implemented")
 }
 
-func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("Target() must be called within a Transition"))
@@ -484,14 +488,14 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 				}
 			}
 			// push a validation step to ensure the target exists after the model is built
-			builder.Push(func(builder *Builder, stack []elements.Element) elements.Element {
-				if _, exists := builder.model.elements[qualifiedName]; !exists {
+			model.Push(func(model *Model, stack []elements.Element) elements.Element {
+				if _, exists := model.namespace[qualifiedName]; !exists {
 					panic(fmt.Errorf("missing target %s for transition %s", target, transition.QualifiedName()))
 				}
 				return transition
 			})
-		case Partial:
-			targetElement := target(builder, stack)
+		case RedifinableElement:
+			targetElement := target(model, stack)
 			if targetElement == nil {
 				panic(fmt.Errorf("target is nil"))
 			}
@@ -503,12 +507,12 @@ func Target[T interface{ Partial | string }](nameOrPartialElement T) Partial {
 	}
 }
 
-func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName ...string) Partial {
+func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".effect"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			slog.Error("effect must be called within a Transition")
@@ -518,18 +522,18 @@ func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName .
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
-		model.elements[behavior.QualifiedName()] = behavior
+		model.namespace[behavior.QualifiedName()] = behavior
 		owner.(*transition).effect = behavior.QualifiedName()
 		return owner
 	}
 }
 
-func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeName ...string) Partial {
+func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeName ...string) RedifinableElement {
 	name := ".guard"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("guard must be called within a Transition"))
@@ -538,14 +542,14 @@ func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeNa
 			element:    element{kind: kinds.Constraint, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			expression: fn,
 		}
-		model.elements[constraint.QualifiedName()] = constraint
+		model.namespace[constraint.QualifiedName()] = constraint
 		owner.(*transition).guard = constraint.QualifiedName()
 		return owner
 	}
 }
 
-func Initial[T interface{ string | Partial }](elementOrName T, partialElements ...Partial) Partial {
-	return func(model *Builder, stack []elements.Element) elements.Element {
+func Initial[T interface{ string | RedifinableElement }](elementOrName T, partialElements ...RedifinableElement) RedifinableElement {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.StateMachine, kinds.State)
 		if owner == nil {
 			panic(fmt.Errorf("initial must be called within a Model or State"))
@@ -553,7 +557,7 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 		initial := &vertex{
 			element: element{kind: kinds.Initial, qualifiedName: path.Join(owner.QualifiedName(), ".initial")},
 		}
-		if model.elements[initial.QualifiedName()] != nil {
+		if model.namespace[initial.QualifiedName()] != nil {
 			panic(fmt.Errorf("initial state already exists"))
 		}
 		var target string
@@ -564,13 +568,13 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 			} else {
 				target = any(elementOrName).(string)
 			}
-		case Partial:
-			maybeTarget := any(elementOrName).(Partial)(model, stack)
+		case RedifinableElement:
+			maybeTarget := any(elementOrName).(RedifinableElement)(model, stack)
 			if maybeTarget != nil {
 				target = maybeTarget.QualifiedName()
 			}
 		}
-		model.elements[initial.QualifiedName()] = initial
+		model.namespace[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
 		transition := (Transition(Target(target), append(partialElements, Source(initial.QualifiedName()))...)(model, stack)).(*transition)
 		// validation logic
@@ -590,41 +594,41 @@ func Initial[T interface{ string | Partial }](elementOrName T, partialElements .
 	}
 }
 
-func Choice[T interface{ Partial | string }](elementOrName T, partialElements ...Partial) Partial {
+func Choice[T interface{ RedifinableElement | string }](elementOrName T, partialElements ...RedifinableElement) RedifinableElement {
 	name := ""
 	switch any(elementOrName).(type) {
 	case string:
 		name = any(elementOrName).(string)
-	case Partial:
-		partialElements = append([]Partial{any(elementOrName).(Partial)}, partialElements...)
+	case RedifinableElement:
+		partialElements = append([]RedifinableElement{any(elementOrName).(RedifinableElement)}, partialElements...)
 	}
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("choice must be called within a State or Transition"))
 		} else if kinds.IsKind(owner.Kind(), kinds.Transition) {
 			source := owner.(*transition).source
-			owner = builder.elements[source]
+			owner = model.namespace[source]
 			if owner == nil {
 				slog.Error("missing source", "id", source)
 				panic(fmt.Errorf("missing source %s", source))
 			}
 		}
 		if name == "" {
-			name = fmt.Sprintf("choice_%d", len(builder.elements))
+			name = fmt.Sprintf("choice_%d", len(model.elements))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), name)
 		element := &vertex{
 			element: element{kind: kinds.Choice, qualifiedName: qualifiedName},
 		}
-		builder.elements[qualifiedName] = element
+		model.namespace[qualifiedName] = element
 		stack = append(stack, element)
-		apply(builder, stack, partialElements...)
+		apply(model, stack, partialElements...)
 		if len(element.transitions) == 0 {
 			slog.Error("choice must have at least one transition")
 			panic(fmt.Errorf("choice must have at least one transition"))
 		}
-		if defaultTransition := get[elements.Transition](&builder.model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
+		if defaultTransition := get[elements.Transition](model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
 			if defaultTransition.Guard() != "" {
 				panic(fmt.Errorf("the last transition of a choice state cannot have a guard"))
 			}
@@ -633,12 +637,12 @@ func Choice[T interface{ Partial | string }](elementOrName T, partialElements ..
 	}
 }
 
-func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".entry"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("entry must be called within a State")
@@ -648,18 +652,18 @@ func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ..
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
-		model.elements[element.QualifiedName()] = element
+		model.namespace[element.QualifiedName()] = element
 		owner.(*state).entry = element.QualifiedName()
 		return element
 	}
 }
 
-func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".activity"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("activity must be called within a State")
@@ -670,18 +674,25 @@ func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName
 			element: element{kind: kinds.Concurrent, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
-		model.elements[element.QualifiedName()] = element
+		model.namespace[element.QualifiedName()] = element
 		owner.(*state).activity = element.QualifiedName()
 		return element
 	}
 }
 
-func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) Partial {
+func Telemetry(provider trace.TracerProvider) RedifinableElement {
+	return func(model *Model, stack []elements.Element) elements.Element {
+		model.telemetry = provider
+		return nil
+	}
+}
+
+func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".exit"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Builder, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("exit must be called within a State")
@@ -692,14 +703,14 @@ func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...
 			element: element{kind: kinds.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
 			action:  fn,
 		}
-		model.elements[element.QualifiedName()] = element
+		model.namespace[element.QualifiedName()] = element
 		owner.(*state).exit = element.QualifiedName()
 		return element
 	}
 }
 
-func Trigger[T interface{ string | *event }](events ...T) Partial {
-	return func(model *Builder, stack []elements.Element) elements.Element {
+func Trigger[T interface{ string | *event }](events ...T) RedifinableElement {
+	return func(model *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("trigger must be called within a Transition"))
@@ -721,12 +732,31 @@ func Trigger[T interface{ string | *event }](events ...T) Partial {
 	}
 }
 
-func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName ...string) Partial {
+func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName ...string) RedifinableElement {
 	name := ".after"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+	return func(builder *Model, stack []elements.Element) elements.Element {
+		owner := find(stack, kinds.Transition)
+		if owner == nil {
+			panic(fmt.Errorf("after must be called within a Transition"))
+		}
+		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
+		owner.(*transition).events = append(owner.(*transition).events, &event{
+			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
+			data:    expr,
+		})
+		return owner
+	}
+}
+
+func Interval[T context.Context](expr func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
+	name := ".interval"
+	if len(maybeName) > 0 {
+		name = maybeName[0]
+	}
+	return func(builder *Model, stack []elements.Element) elements.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
@@ -757,8 +787,8 @@ func NewEvent(name string, maybeData ...any) *event {
 	return event
 }
 
-func Final(name string) Partial {
-	return func(builder *Builder, stack []elements.Element) elements.Element {
+func Final(name string) RedifinableElement {
+	return func(builder *Model, stack []elements.Element) elements.Element {
 		panic("not implemented")
 	}
 }
@@ -774,10 +804,11 @@ type HSM[T context.Context] struct {
 	context.Context
 	behavior[T]
 	state     elements.Element
-	model     *model
+	model     *Model
 	active    map[string]*active
 	queue     queue
 	execution atomic.Uint32
+	trace     trace.Tracer
 	Storage   T
 }
 
@@ -788,7 +819,7 @@ type Context[T context.Context] struct {
 
 var contextKey = unique.Make("context")
 
-func New[T context.Context](ctx T, model *model) *HSM[T] {
+func New[T context.Context](ctx T, model *Model) *HSM[T] {
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -799,6 +830,7 @@ func New[T context.Context](ctx T, model *model) *HSM[T] {
 		model:   model,
 		active:  map[string]*active{},
 		Storage: ctx,
+		trace:   model.telemetry.Tracer("hsm"),
 	}
 	all, ok := ctx.Value(contextKey).(*sync.Map)
 	if !ok {
@@ -809,7 +841,6 @@ func New[T context.Context](ctx T, model *model) *HSM[T] {
 	hsm.action = func(ctx Context[T], event Event) {
 		hsm.state = hsm.initial(&model.state, event)
 		hsm.execution.Store(InState)
-
 	}
 	hsm.execute(&hsm.behavior, nil)
 	return hsm
@@ -832,7 +863,7 @@ func (hsm *HSM[T]) Terminate() {
 	var ok bool
 	for hsm.state != nil {
 		hsm.exit(hsm.state, nil)
-		hsm.state, ok = hsm.model.elements[hsm.state.Owner()]
+		hsm.state, ok = hsm.model.namespace[hsm.state.Owner()]
 		if !ok {
 			break
 		}
@@ -854,6 +885,8 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 	if hsm == nil {
 		return nil
 	}
+	_, span := hsm.trace.Start(hsm, "enter")
+	defer span.End()
 	switch element.Kind() {
 	case kinds.State:
 		state := element.(*state)
@@ -887,7 +920,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 								case <-hsm.Done():
 									return
 								case <-timer.C:
-									go hsm.Dispatch(event)
+									hsm.Dispatch(event)
 									return
 								}
 							}
@@ -916,9 +949,11 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 }
 
 func (hsm *HSM[T]) initial(element elements.Element, event Event) elements.Element {
-	if element == nil || hsm == nil {
+	if hsm == nil || element == nil {
 		return nil
 	}
+	_, span := hsm.trace.Start(hsm, "initial")
+	defer span.End()
 	var qualifiedName string
 	if element.QualifiedName() == "/" {
 		qualifiedName = "/.initial"
@@ -936,9 +971,11 @@ func (hsm *HSM[T]) initial(element elements.Element, event Event) elements.Eleme
 }
 
 func (hsm *HSM[T]) exit(element elements.Element, event Event) {
-	if element == nil || hsm == nil {
+	if hsm == nil || element == nil {
 		return
 	}
+	_, span := hsm.trace.Start(hsm, "exit")
+	defer span.End()
 	if state, ok := element.(*state); ok {
 		for _, qualifiedName := range state.transitions {
 			if element := get[*transition](hsm.model, qualifiedName); element != nil {
@@ -968,6 +1005,8 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
+	_, span := hsm.trace.Start(hsm, "execute")
+	defer span.End()
 	switch element.Kind() {
 	case kinds.Concurrent:
 		current, ok := hsm.active[element.QualifiedName()]
@@ -979,6 +1018,8 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 		ctx, current.cancel = context.WithCancel(hsm)
 		current.channel = make(chan struct{})
 		go func(channel chan struct{}) {
+			_, span := hsm.trace.Start(hsm, "action")
+			defer span.End()
 			element.action(Context[T]{
 				Context: ctx,
 				HSM:     hsm,
@@ -986,6 +1027,8 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			close(channel)
 		}(current.channel)
 	default:
+		_, span := hsm.trace.Start(hsm, "action")
+		defer span.End()
 		element.action(Context[T]{
 			Context: hsm.Context,
 			HSM:     hsm,
@@ -999,6 +1042,8 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	if hsm == nil || guard == nil || guard.expression == nil {
 		return true
 	}
+	_, span := hsm.trace.Start(hsm, "evaluate")
+	defer span.End()
 	return guard.expression(
 		Context[T]{
 			Context: hsm.Context,
@@ -1012,12 +1057,14 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 	if hsm == nil {
 		return nil
 	}
+	_, span := hsm.trace.Start(hsm, "transition")
+	defer span.End()
 	path, ok := transition.paths[current.QualifiedName()]
 	if !ok {
 		return nil
 	}
 	for _, exiting := range path.exit {
-		current, ok = hsm.model.elements[exiting]
+		current, ok = hsm.model.namespace[exiting]
 		if !ok {
 			return nil
 		}
@@ -1030,7 +1077,7 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 		return current
 	}
 	for _, entering := range path.enter {
-		next, ok := hsm.model.elements[entering]
+		next, ok := hsm.model.namespace[entering]
 		if !ok {
 			return nil
 		}
@@ -1040,18 +1087,20 @@ func (hsm *HSM[T]) transition(current elements.Element, transition *transition, 
 			return current
 		}
 	}
-	current, ok = hsm.model.elements[transition.target]
+	current, ok = hsm.model.namespace[transition.target]
 	if !ok {
 		return nil
 	}
 	return current
 }
 
-func (hsm *HSM[T]) terminate(element *behavior[T]) {
-	if hsm == nil || element == nil {
+func (hsm *HSM[T]) terminate(behavior *behavior[T]) {
+	if hsm == nil || behavior == nil {
 		return
 	}
-	active, ok := hsm.active[element.QualifiedName()]
+	_, span := hsm.trace.Start(hsm, "terminate")
+	defer span.End()
+	active, ok := hsm.active[behavior.QualifiedName()]
 	if !ok {
 		return
 	}
@@ -1088,6 +1137,8 @@ func (hsm *HSM[T]) Dispatch(event Event) bool {
 	if hsm == nil {
 		return false
 	}
+	_, span := hsm.trace.Start(hsm, "Dispatch")
+	defer span.End()
 	if hsm.state == nil {
 		return false
 	}
@@ -1118,17 +1169,22 @@ func (hsm *HSM[T]) Dispatch(event Event) bool {
 	return true
 }
 
-func (sm *HSM[T]) DispatchAll(event Event) {
-	active, ok := sm.Value(contextKey).(*sync.Map)
+func (hsm *HSM[T]) DispatchAll(event Event) {
+	active, ok := hsm.Value(contextKey).(*sync.Map)
 	if !ok {
 		return
 	}
-	active.Range(func(value any, _ any) bool {
-		sm, ok := value.(elements.Context)
-		if !ok {
+	_, span := hsm.trace.Start(hsm, "DispatchAll")
+	go func(active *sync.Map, span trace.Span) {
+		defer span.End()
+		active.Range(func(value any, _ any) bool {
+			sm, ok := value.(elements.Context)
+			if !ok {
+				return true
+			}
+			sm.Dispatch(event)
 			return true
-		}
-		go sm.Dispatch(event)
-		return true
-	})
+		})
+	}(active, span)
+
 }

@@ -36,13 +36,13 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 			}
 		}
 	}
-	initial, ok := model.Elements()[path.Join(state.QualifiedName(), ".initial")]
+	initial, ok := model.Namespace()[path.Join(state.QualifiedName(), ".initial")]
 	if ok {
 		if !composite {
 			composite = true
 			fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
 		}
-		if transition, ok := model.Elements()[initial.(elements.Vertex).Transitions()[0]]; ok {
+		if transition, ok := model.Namespace()[initial.(elements.Vertex).Transitions()[0]]; ok {
 			generateTransition(builder, depth+1, transition.(elements.Transition), allElements, visited)
 		}
 	}
@@ -117,8 +117,8 @@ func generateElements(builder *strings.Builder, depth int, model elements.Model,
 			generateState(builder, depth+1, element, model, allElements, visited)
 		}
 	}
-	if initial, ok := model.Elements()[path.Join(model.QualifiedName(), ".initial")]; ok {
-		if transition, ok := model.Elements()[initial.(elements.Vertex).Transitions()[0]]; ok {
+	if initial, ok := model.Namespace()[path.Join(model.QualifiedName(), ".initial")]; ok {
+		if transition, ok := model.Namespace()[initial.(elements.Vertex).Transitions()[0]]; ok {
 			generateTransition(builder, depth, transition.(elements.Transition), allElements, visited)
 		}
 	}
@@ -136,7 +136,7 @@ func generateElements(builder *strings.Builder, depth int, model elements.Model,
 func Generate(writer io.Writer, model elements.Model) error {
 	var builder strings.Builder
 	elements := []elements.Element{}
-	for _, element := range model.Elements() {
+	for _, element := range model.Namespace() {
 		elements = append(elements, element)
 	}
 	// Sort elements hierarchically like a directory structure

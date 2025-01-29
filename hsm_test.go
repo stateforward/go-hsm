@@ -9,6 +9,12 @@ import (
 
 	"github.com/stateforward/go-hsm"
 	"github.com/stateforward/go-hsm/pkg/plantuml"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 )
 
 type Trace struct {
@@ -54,7 +60,38 @@ type THSM struct {
 	*hsm.HSM[*storage]
 }
 
+var headers = map[string]string{
+	"content-type": "application/json",
+}
+
+var exporter, _ = otlptrace.New(
+	context.Background(),
+	otlptracehttp.NewClient(
+		otlptracehttp.WithEndpoint("localhost:4318"),
+		otlptracehttp.WithHeaders(headers),
+		otlptracehttp.WithInsecure(),
+	),
+)
+var provider = trace.NewTracerProvider(
+	trace.WithBatcher(
+		exporter,
+		trace.WithMaxExportBatchSize(trace.DefaultMaxExportBatchSize),
+		trace.WithBatchTimeout(trace.DefaultScheduleDelay*time.Millisecond),
+		trace.WithMaxExportBatchSize(trace.DefaultMaxExportBatchSize),
+	),
+	trace.WithResource(
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("hsm-test"),
+		),
+	),
+)
+
 func TestHSM(t *testing.T) {
+	otel.SetTracerProvider(provider)
+	tracer := provider.Tracer("github.com/stateforward/go-hsm")
+	_, span := tracer.Start(context.Background(), "test")
+	span.End()
 	trace := &Trace{}
 
 	mockAction := func(name string, async bool) func(ctx hsm.Context[*storage], event hsm.Event) {
@@ -67,7 +104,7 @@ func TestHSM(t *testing.T) {
 		}
 	}
 	dEvent := hsm.NewEvent("D")
-	model := hsm.Model(
+	model := hsm.Define(
 		hsm.State("s",
 			hsm.Entry(mockAction("s.entry", false)),
 			hsm.Activity(mockAction("s.activity", true)),
@@ -118,7 +155,7 @@ func TestHSM(t *testing.T) {
 				hsm.Activity(mockAction("s3.activity", true)),
 				hsm.Exit(mockAction("s3.exit", false)),
 			),
-			hsm.Transition(hsm.Trigger(`*/P/*`), hsm.Effect(mockAction("s11.P.transition.effect", false))),
+			hsm.Transition(hsm.Trigger(`*.P.*`), hsm.Effect(mockAction("s11.P.transition.effect", false))),
 		),
 		hsm.Initial(
 			hsm.Choice(
@@ -164,6 +201,8 @@ func TestHSM(t *testing.T) {
 			ctx.Dispatch(hsm.NewEvent("K"))
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
+		hsm.Telemetry(provider),
+
 		// hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
 	)
 	sm := THSM{hsm.New(&storage{
@@ -314,7 +353,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second)
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -345,7 +384,7 @@ func TestHSM(t *testing.T) {
 	}
 	trace.reset()
 
-	sm.Dispatch(hsm.NewEvent("K/P"))
+	sm.Dispatch(hsm.NewEvent("K.P.A"))
 	if !trace.contains(Trace{
 		sync: []string{"s11.P.transition.effect"},
 	}) {
@@ -361,11 +400,11 @@ func TestHSM(t *testing.T) {
 	}) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
-
+	provider.ForceFlush(context.Background())
 }
 
 func TestHSMDispatchAll(t *testing.T) {
-	model := hsm.Model(
+	model := hsm.Define(
 		hsm.State("foo"),
 		hsm.State("bar"),
 		hsm.Transition(hsm.Trigger("foo"), hsm.Source("foo"), hsm.Target("bar")),
@@ -375,7 +414,11 @@ func TestHSMDispatchAll(t *testing.T) {
 	ctx := context.Background()
 	sm1 := hsm.New(ctx, &model)
 	sm2 := hsm.New(sm1, &model)
+	if sm2.State() != "/foo" {
+		t.Fatal("state is not correct", "state", sm2.State())
+	}
 	sm2.DispatchAll(hsm.NewEvent("foo"))
+	time.Sleep(time.Second)
 	if sm1.State() != "/bar" {
 		t.Fatal("state is not correct", "state", sm1.State())
 	}
@@ -388,7 +431,7 @@ func noBehavior(hsm hsm.Context[context.Context], event hsm.Event) {
 }
 
 // }
-var benchModel = hsm.Model(
+var benchModel = hsm.Define(
 	hsm.State("foo",
 		hsm.Entry(noBehavior),
 		hsm.Exit(noBehavior),
@@ -410,6 +453,7 @@ var benchModel = hsm.Model(
 		hsm.Effect(noBehavior),
 	),
 	hsm.Initial("foo", hsm.Effect(noBehavior)),
+	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
 var benchSM = hsm.New(context.Background(), &benchModel)
 

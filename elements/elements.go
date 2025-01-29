@@ -15,7 +15,7 @@ type Element interface {
 
 type Model interface {
 	Element
-	Elements() map[string]Element
+	Namespace() map[string]Element
 }
 
 type Transition interface {
