@@ -1,7 +1,6 @@
 package hsm
 
 import (
-	"container/heap"
 	"context"
 	"fmt"
 	"log/slog"
@@ -11,11 +10,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unique"
 
-	"github.com/stateforward/go-hsm/elements"
+	"github.com/stateforward/go-hsm/embedded"
 	"github.com/stateforward/go-hsm/kinds"
 	"github.com/stateforward/go-hsm/pkg/telemetry"
+	"github.com/stateforward/go-hsm/queue"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -24,6 +24,8 @@ import (
 type element struct {
 	kind          uint64
 	qualifiedName string
+	id            string
+	attributes    []attribute.KeyValue
 }
 
 func (element *element) Kind() uint64 {
@@ -38,6 +40,13 @@ func (element *element) Owner() string {
 		return ""
 	}
 	return path.Dir(element.qualifiedName)
+}
+
+func (element *element) Id() string {
+	if element == nil {
+		return ""
+	}
+	return element.id
 }
 
 func (element *element) Name() string {
@@ -58,12 +67,12 @@ func (element *element) QualifiedName() string {
 
 type Model struct {
 	state
-	namespace map[string]elements.Element
+	namespace map[string]embedded.Element
 	elements  []RedifinableElement
-	telemetry trace.TracerProvider
+	trace     trace.Tracer
 }
 
-func (model *Model) Namespace() map[string]elements.Element {
+func (model *Model) Namespace() map[string]embedded.Element {
 	return model.namespace
 }
 
@@ -71,7 +80,7 @@ func (model *Model) Push(partial RedifinableElement) {
 	model.elements = append(model.elements, partial)
 }
 
-type RedifinableElement = func(model *Model, stack []elements.Element) elements.Element
+type RedifinableElement = func(model *Model, stack []embedded.Element) embedded.Element
 
 /******* Vertex *******/
 
@@ -118,7 +127,7 @@ type transition struct {
 	target string
 	guard  string
 	effect string
-	events []elements.Event
+	events []embedded.Event
 	paths  map[string]paths
 }
 
@@ -130,7 +139,7 @@ func (transition *transition) Effect() string {
 	return transition.effect
 }
 
-func (transition *transition) Events() []elements.Event {
+func (transition *transition) Events() []embedded.Event {
 	return transition.events
 }
 
@@ -159,14 +168,14 @@ type constraint[T context.Context] struct {
 /******* Active *******/
 
 type active struct {
-	context context.Context
+	context.Context
 	channel chan struct{}
 	cancel  context.CancelFunc
 }
 
 /******* Events *******/
 
-type Event = elements.Event
+type Event = embedded.Event
 
 type event struct {
 	element
@@ -187,82 +196,33 @@ func (event *event) Data() any {
 	return event.data
 }
 
-/******* Queue *******/
-
-type queue struct {
-	events []elements.Element
-	mutex  sync.RWMutex
-}
-
-func (q *queue) Len() int {
-	q.mutex.RLock()
-	defer q.mutex.RUnlock()
-	return len(q.events)
-}
-
-func (q *queue) Less(i, j int) bool {
-	q.mutex.RLock()
-	defer q.mutex.RUnlock()
-	return kinds.IsKind(q.events[i].Kind(), kinds.CompletionEvent) && !kinds.IsKind(q.events[j].Kind(), kinds.CompletionEvent)
-}
-
-func (q *queue) Swap(i, j int) {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	q.events[i], q.events[j] = q.events[j], q.events[i]
-}
-
-func (q *queue) Pop() any {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	event := q.events[0]
-	q.events = q.events[1:]
-	return event
-}
-
-func (q *queue) Push(event any) {
-	switch event := event.(type) {
-	case Event:
-		{
-			q.mutex.Lock()
-			defer q.mutex.Unlock()
-			if kinds.IsKind(event.Kind(), kinds.CompletionEvent) {
-				q.events = append([]elements.Element{event}, q.events...)
-			} else {
-				q.events = append(q.events, event)
-			}
-		}
-	}
-
-}
-
-func apply(model *Model, stack []elements.Element, partials ...RedifinableElement) {
+func apply(model *Model, stack []embedded.Element, partials ...RedifinableElement) {
 	for _, partial := range partials {
 		partial(model, stack)
 	}
 }
 
-func Define(redifinableElements ...RedifinableElement) Model {
+func Define(name string, redifinableElements ...RedifinableElement) Model {
 	model := Model{
 		state: state{
 			vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/"}, transitions: []string{}},
 		},
-		namespace: map[string]elements.Element{},
+		namespace: map[string]embedded.Element{},
 		elements:  redifinableElements,
-		telemetry: telemetry.NewProvider(),
+		trace:     telemetry.NewProvider().Tracer("hsm"),
 	}
 
-	stack := []elements.Element{&model}
+	stack := []embedded.Element{&model}
 	for len(model.elements) > 0 {
 		elements := model.elements
 		model.elements = []RedifinableElement{}
 		apply(&model, stack, elements...)
 	}
-
+	model.id = name
 	return model
 }
 
-func find(stack []elements.Element, maybeKinds ...uint64) elements.Element {
+func find(stack []embedded.Element, maybeKinds ...uint64) embedded.Element {
 	for i := len(stack) - 1; i >= 0; i-- {
 		if kinds.IsKind(stack[i].Kind(), maybeKinds...) {
 			return stack[i]
@@ -271,7 +231,7 @@ func find(stack []elements.Element, maybeKinds ...uint64) elements.Element {
 	return nil
 }
 
-func get[T elements.Element](model *Model, name string) T {
+func get[T embedded.Element](model *Model, name string) T {
 	var zero T
 	if name == "" {
 		return zero
@@ -286,7 +246,7 @@ func get[T elements.Element](model *Model, name string) T {
 }
 
 func State(name string, partialElements ...RedifinableElement) RedifinableElement {
-	return func(graph *Model, stack []elements.Element) elements.Element {
+	return func(graph *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.StateMachine, kinds.State)
 		if owner == nil {
 			slog.Error("state must be called within a StateMachine or State")
@@ -364,7 +324,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 	case RedifinableElement:
 		partialElements = append([]RedifinableElement{any(nameOrPartialElement).(RedifinableElement)}, partialElements...)
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Vertex)
 		if owner == nil {
 			panic(fmt.Errorf("transition must be called within a State or StateMachine"))
@@ -373,7 +333,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 			name = fmt.Sprintf("transition_%d", len(model.namespace))
 		}
 		transition := &transition{
-			events: []elements.Event{},
+			events: []embedded.Event{},
 			element: element{
 				kind:          kinds.Transition,
 				qualifiedName: path.Join(owner.QualifiedName(), name),
@@ -433,7 +393,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 				exit:  []string{sourceElement.QualifiedName()},
 			}
 		} else {
-			model.Push(func(model *Model, stack []elements.Element) elements.Element {
+			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
 				// precompute transition paths for the source state and nested states
 				for qualifiedName, element := range model.namespace {
 					if strings.HasPrefix(qualifiedName, transition.source) && kinds.IsKind(element.Kind(), kinds.Vertex, kinds.StateMachine) {
@@ -461,7 +421,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 }
 
 func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("source must be called within a Transition"))
@@ -471,12 +431,12 @@ func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 		case string:
 			name = any(nameOrPartialElement).(string)
 			if !path.IsAbs(name) {
-				if ancestor := find(stack, kinds.State, kinds.StateMachine); ancestor != nil {
+				if ancestor := find(stack, kinds.State); ancestor != nil {
 					name = path.Join(ancestor.QualifiedName(), name)
 				}
 			}
 			// push a validation step to ensure the source exists after the model is built
-			model.Push(func(model *Model, stack []elements.Element) elements.Element {
+			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
 				if _, ok := model.namespace[name]; !ok {
 					slog.Error("missing source", "id", name)
 					panic(fmt.Errorf("missing source %s", name))
@@ -500,7 +460,7 @@ func Defer(events ...uint64) RedifinableElement {
 }
 
 func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("Target() must be called within a Transition"))
@@ -519,7 +479,7 @@ func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 				}
 			}
 			// push a validation step to ensure the target exists after the model is built
-			model.Push(func(model *Model, stack []elements.Element) elements.Element {
+			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
 				if _, exists := model.namespace[qualifiedName]; !exists {
 					panic(fmt.Errorf("missing target %s for transition %s", target, transition.QualifiedName()))
 				}
@@ -543,7 +503,7 @@ func Effect[T context.Context](fn func(hsm Context[T], event Event), maybeName .
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			slog.Error("effect must be called within a Transition")
@@ -564,7 +524,7 @@ func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeNa
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("guard must be called within a Transition"))
@@ -580,7 +540,7 @@ func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeNa
 }
 
 func Initial[T interface{ string | RedifinableElement }](elementOrName T, partialElements ...RedifinableElement) RedifinableElement {
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.StateMachine, kinds.State)
 		if owner == nil {
 			panic(fmt.Errorf("initial must be called within a Model or State"))
@@ -633,7 +593,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 	case RedifinableElement:
 		partialElements = append([]RedifinableElement{any(elementOrName).(RedifinableElement)}, partialElements...)
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.State, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("choice must be called within a State or Transition"))
@@ -641,7 +601,6 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 			source := owner.(*transition).source
 			owner = model.namespace[source]
 			if owner == nil {
-				slog.Error("missing source", "id", source)
 				panic(fmt.Errorf("missing source %s", source))
 			}
 		}
@@ -659,7 +618,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 			slog.Error("choice must have at least one transition")
 			panic(fmt.Errorf("choice must have at least one transition"))
 		}
-		if defaultTransition := get[elements.Transition](model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
+		if defaultTransition := get[embedded.Transition](model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
 			if defaultTransition.Guard() != "" {
 				panic(fmt.Errorf("the last transition of a choice state cannot have a guard"))
 			}
@@ -673,7 +632,7 @@ func Entry[T context.Context](fn func(ctx Context[T], event Event), maybeName ..
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("entry must be called within a State")
@@ -694,7 +653,7 @@ func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("activity must be called within a State")
@@ -711,9 +670,18 @@ func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName
 	}
 }
 
-func Telemetry(provider trace.TracerProvider) RedifinableElement {
-	return func(model *Model, stack []elements.Element) elements.Element {
-		model.telemetry = provider
+func Telemetry[T any](providerOrTracer T) RedifinableElement {
+	var tracer trace.Tracer
+	switch unknown := any(providerOrTracer).(type) {
+	case trace.TracerProvider:
+		tracer = unknown.Tracer("hsm")
+	case trace.Tracer:
+		tracer = unknown
+	default:
+		panic(fmt.Errorf("invalid telemetry provider or tracer"))
+	}
+	return func(model *Model, stack []embedded.Element) embedded.Element {
+		model.trace = tracer
 		return nil
 	}
 }
@@ -723,7 +691,7 @@ func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.State)
 		if owner == nil {
 			slog.Error("exit must be called within a State")
@@ -741,7 +709,7 @@ func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...
 }
 
 func Trigger[T interface{ string | *event }](events ...T) RedifinableElement {
-	return func(model *Model, stack []elements.Element) elements.Element {
+	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("trigger must be called within a Transition"))
@@ -768,7 +736,7 @@ func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(builder *Model, stack []elements.Element) elements.Element {
+	return func(builder *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
@@ -787,7 +755,7 @@ func Interval[T context.Context](expr func(ctx Context[T], event Event), maybeNa
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(builder *Model, stack []elements.Element) elements.Element {
+	return func(builder *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kinds.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
@@ -813,42 +781,54 @@ func NewEvent(name string, maybeData ...any) *event {
 		data = maybeData[0]
 	}
 	event := pool.Get().(*event)
+	// id := ""
+	// uid, err := uuid.NewV7()
+	// if err != nil {
+	// 	id = uid.String()
+	// }
 	event.element = element{kind: kinds.Event, qualifiedName: name}
 	event.data = data
 	return event
 }
 
 func Final(name string) RedifinableElement {
-	return func(builder *Model, stack []elements.Element) elements.Element {
+	return func(builder *Model, stack []embedded.Element) embedded.Element {
 		panic("not implemented")
 	}
 }
 
 type Execution = uint32
 
-const (
-	InTransit Execution = iota
-	InState
-)
-
 type HSM[T context.Context] struct {
 	context.Context
 	behavior[T]
-	state     elements.Element
-	model     *Model
-	active    map[string]*active
-	queue     queue
-	execution atomic.Uint32
-	trace     trace.Tracer
-	Storage   T
+	state      embedded.Element
+	model      *Model
+	active     map[string]*Context[T]
+	queue      *queue.Queue
+	processing atomic.Bool
+	trace      trace.Tracer
+	Storage    T
 }
 
 type Context[T context.Context] struct {
 	context.Context
 	*HSM[T]
+	cancel  context.CancelFunc
+	channel chan struct{}
 }
 
-var contextKey = unique.Make("context")
+func (ctx Context[T]) Dispatch(event Event) {
+	if ctx.cancel != nil {
+		go ctx.HSM.Dispatch(event)
+		return
+	}
+	ctx.HSM.Dispatch(event)
+}
+
+type key struct{}
+
+var allKey = key{}
 
 func New[T context.Context](ctx T, model *Model) *HSM[T] {
 	hsm := &HSM[T]{
@@ -859,19 +839,21 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 			},
 		},
 		model:   model,
-		active:  map[string]*active{},
+		active:  map[string]*Context[T]{},
 		Storage: ctx,
-		trace:   model.telemetry.Tracer("hsm"),
+		trace:   model.trace,
+		queue:   queue.New(),
 	}
-	all, ok := ctx.Value(contextKey).(*sync.Map)
+	all, ok := ctx.Value(allKey).(*sync.Map)
 	if !ok {
 		all = &sync.Map{}
 	}
 	all.Store(hsm, struct{}{})
-	hsm.Context = context.WithValue(ctx, contextKey, all)
+	hsm.Context = context.WithValue(ctx, allKey, all)
 	hsm.action = func(ctx Context[T], event Event) {
+		hsm.processing.Store(true)
+		defer hsm.processing.Store(false)
 		hsm.state = hsm.initial(&model.state, event)
-		hsm.execution.Store(InState)
 	}
 	hsm.execute(&hsm.behavior, nil)
 	return hsm
@@ -901,18 +883,19 @@ func (hsm *HSM[T]) Terminate() {
 	}
 }
 
-func (hsm *HSM[T]) activate(element elements.Element) *active {
+func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
 	current, ok := hsm.active[element.QualifiedName()]
 	if !ok {
-		current = &active{}
+		current = &Context[T]{
+			channel: make(chan struct{}),
+		}
 		hsm.active[element.QualifiedName()] = current
 	}
-	current.context, current.cancel = context.WithCancel(hsm)
-	current.channel = make(chan struct{})
+	current.Context, current.cancel = context.WithCancel(hsm)
 	return current
 }
 
-func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry bool) elements.Element {
+func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry bool) embedded.Element {
 	if hsm == nil {
 		return nil
 	}
@@ -933,8 +916,8 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 				for _, event := range element.Events() {
 					switch event.Kind() {
 					case kinds.TimeEvent:
-						active := hsm.activate(element)
-						go func(ctx context.Context, channel chan struct{}) {
+						ctx := hsm.activate(element)
+						go func(ctx *Context[T], event embedded.Event) {
 							duration := event.Data().(func(hsm Context[T]) time.Duration)(
 								Context[T]{
 									Context: ctx,
@@ -943,19 +926,18 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 							)
 							timer := time.NewTimer(duration)
 							defer timer.Stop()
-							defer close(channel)
-							for {
-								select {
-								case <-ctx.Done():
-									return
-								case <-hsm.Done():
-									return
-								case <-timer.C:
-									hsm.Dispatch(event)
-									return
-								}
+							select {
+							case <-ctx.Done():
+								ctx.channel <- struct{}{}
+								break
+							case <-hsm.Done():
+								break
+							case <-timer.C:
+								hsm.Dispatch(event)
+								break
 							}
-						}(active.context, active.channel)
+							ctx.channel <- struct{}{}
+						}(ctx, event)
 					}
 				}
 			}
@@ -979,7 +961,7 @@ func (hsm *HSM[T]) enter(element elements.Element, event Event, defaultEntry boo
 	return nil
 }
 
-func (hsm *HSM[T]) initial(element elements.Element, event Event) elements.Element {
+func (hsm *HSM[T]) initial(element embedded.Element, event Event) embedded.Element {
 	if hsm == nil || element == nil {
 		return nil
 	}
@@ -1001,7 +983,7 @@ func (hsm *HSM[T]) initial(element elements.Element, event Event) elements.Eleme
 	return element
 }
 
-func (hsm *HSM[T]) exit(element elements.Element, event Event) {
+func (hsm *HSM[T]) exit(element embedded.Element, event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
@@ -1040,23 +1022,16 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 	defer span.End()
 	switch element.Kind() {
 	case kinds.Concurrent:
-		current, ok := hsm.active[element.QualifiedName()]
-		if current == nil || !ok {
-			current = &active{}
-			hsm.active[element.QualifiedName()] = current
-		}
-		var ctx context.Context
-		ctx, current.cancel = context.WithCancel(hsm)
-		current.channel = make(chan struct{})
-		go func(channel chan struct{}) {
+		ctx := hsm.activate(element)
+		go func(ctx *Context[T]) {
 			_, span := hsm.trace.Start(hsm, "action")
 			defer span.End()
 			element.action(Context[T]{
 				Context: ctx,
 				HSM:     hsm,
 			}, event)
-			close(channel)
-		}(current.channel)
+			ctx.channel <- struct{}{}
+		}(ctx)
 	default:
 		_, span := hsm.trace.Start(hsm, "action")
 		defer span.End()
@@ -1084,7 +1059,7 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	)
 }
 
-func (hsm *HSM[T]) transition(current elements.Element, transition *transition, event Event) elements.Element {
+func (hsm *HSM[T]) transition(current embedded.Element, transition *transition, event Event) embedded.Element {
 	if hsm == nil {
 		return nil
 	}
@@ -1140,7 +1115,7 @@ func (hsm *HSM[T]) terminate(behavior *behavior[T]) {
 
 }
 
-func (hsm *HSM[T]) enabled(source elements.Vertex, event Event) *transition {
+func (hsm *HSM[T]) enabled(source embedded.Vertex, event Event) *transition {
 	if hsm == nil {
 		return nil
 	}
@@ -1164,25 +1139,16 @@ func (hsm *HSM[T]) enabled(source elements.Vertex, event Event) *transition {
 	return nil
 }
 
-func (hsm *HSM[T]) Dispatch(event Event) bool {
-	if hsm == nil {
-		return false
+func (hsm *HSM[T]) process(event embedded.Event) {
+	if hsm.processing.Load() {
+		return
 	}
-	_, span := hsm.trace.Start(hsm, "Dispatch")
-	defer span.End()
-	if hsm.state == nil {
-		return false
-	}
-	if hsm.execution.Load() == InTransit {
-		heap.Push(&hsm.queue, event)
-		return false
-	}
-	hsm.execution.Store(InTransit)
-	defer hsm.execution.Store(InState)
+	hsm.processing.Store(true)
+	defer hsm.processing.Store(false)
 	for event != nil {
 		state := hsm.state.QualifiedName()
 		for state != "/" {
-			source := get[elements.Vertex](hsm.model, state)
+			source := get[embedded.Vertex](hsm.model, state)
 			if source == nil {
 				break
 			}
@@ -1192,16 +1158,29 @@ func (hsm *HSM[T]) Dispatch(event Event) bool {
 			}
 			state = source.Owner()
 		}
-		if hsm.queue.Len() == 0 {
-			break
-		}
-		event = heap.Pop(&hsm.queue).(Event)
+		pool.Put(event)
+		event = hsm.queue.Pop()
 	}
-	return true
+}
+
+func (hsm *HSM[T]) Dispatch(event Event) {
+	if hsm == nil {
+		return
+	}
+	_, span := hsm.trace.Start(hsm, "Dispatch")
+	defer span.End()
+	if hsm.state == nil {
+		return
+	}
+	if hsm.processing.Load() {
+		hsm.queue.Push(event)
+		return
+	}
+	hsm.process(event)
 }
 
 func (hsm *HSM[T]) DispatchAll(event Event) {
-	active, ok := hsm.Value(contextKey).(*sync.Map)
+	active, ok := hsm.Value(allKey).(*sync.Map)
 	if !ok {
 		return
 	}
@@ -1209,7 +1188,7 @@ func (hsm *HSM[T]) DispatchAll(event Event) {
 	go func(active *sync.Map, span trace.Span) {
 		defer span.End()
 		active.Range(func(value any, _ any) bool {
-			sm, ok := value.(elements.Context)
+			sm, ok := value.(embedded.Context)
 			if !ok {
 				return true
 			}

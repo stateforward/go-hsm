@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/stateforward/go-hsm/elements"
+	"github.com/stateforward/go-hsm/embedded"
 	"github.com/stateforward/go-hsm/kinds"
 )
 
@@ -17,7 +17,7 @@ func idFromQualifiedName(qualifiedName string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(qualifiedName, "/"), "."), "-", "_"), "/", ".")
 }
 
-func generateState(builder *strings.Builder, depth int, state elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
+func generateState(builder *strings.Builder, depth int, state embedded.Element, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
 	id := idFromQualifiedName(state.QualifiedName())
 	indent := strings.Repeat(" ", depth*2)
 	composite := false
@@ -42,8 +42,8 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 			composite = true
 			fmt.Fprintf(builder, "%sstate %s{\n", indent, id)
 		}
-		if transition, ok := model.Namespace()[initial.(elements.Vertex).Transitions()[0]]; ok {
-			generateTransition(builder, depth+1, transition.(elements.Transition), allElements, visited)
+		if transition, ok := model.Namespace()[initial.(embedded.Vertex).Transitions()[0]]; ok {
+			generateTransition(builder, depth+1, transition.(embedded.Transition), allElements, visited)
 		}
 	}
 	if composite {
@@ -56,7 +56,7 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 		fmt.Fprintf(builder, "%sstate %s%s\n", indent, id, tag)
 	}
 	if kinds.IsKind(state.Kind(), kinds.State) {
-		state := state.(elements.State)
+		state := state.(embedded.State)
 		if entry := state.Entry(); entry != "" {
 			fmt.Fprintf(builder, "%sstate %s: entry / %s\n", indent, id, idFromQualifiedName(path.Base(entry)))
 		}
@@ -69,17 +69,14 @@ func generateState(builder *strings.Builder, depth int, state elements.Element, 
 	}
 }
 
-func generateVertex(builder *strings.Builder, depth int, vertex elements.Element, model elements.Model, allElements []elements.Element, visited map[string]any) {
+func generateVertex(builder *strings.Builder, depth int, vertex embedded.Element, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
 	if kinds.IsKind(vertex.Kind(), kinds.State) {
 		generateState(builder, depth, vertex, model, allElements, visited)
 	}
 }
 
-func generateTransition(builder *strings.Builder, depth int, transition elements.Transition, _ []elements.Element, visited map[string]any) {
+func generateTransition(builder *strings.Builder, depth int, transition embedded.Transition, _ []embedded.Element, visited map[string]any) {
 	visited[transition.QualifiedName()] = struct{}{}
-	if kinds.IsKind(transition.Kind(), kinds.Internal) {
-		return
-	}
 	source := transition.Source()
 	label := ""
 	if strings.HasSuffix(source, ".initial") {
@@ -102,13 +99,18 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 	if label != "" {
 		label = fmt.Sprintf(" : %s", label)
 	}
-	target := transition.Target()
 	indent := strings.Repeat(" ", depth*2)
-	fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), label)
+	if transition.Kind() == kinds.Internal {
+		fmt.Fprintf(builder, "%sstate %s%s\n", indent, idFromQualifiedName(source), label)
+	} else {
+		target := transition.Target()
+		fmt.Fprintf(builder, "%s%s ----> %s%s\n", indent, idFromQualifiedName(source), idFromQualifiedName(target), label)
+	}
+
 }
 
-func generateElements(builder *strings.Builder, depth int, model elements.Model, allElements []elements.Element, visited map[string]any) {
-	fmt.Fprintln(builder, "@startuml")
+func generateElements(builder *strings.Builder, depth int, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
+	fmt.Fprintf(builder, "@startuml %s\n", model.Id())
 	for _, element := range allElements {
 		if _, ok := visited[element.QualifiedName()]; ok {
 			continue
@@ -118,13 +120,13 @@ func generateElements(builder *strings.Builder, depth int, model elements.Model,
 		}
 	}
 	if initial, ok := model.Namespace()[path.Join(model.QualifiedName(), ".initial")]; ok {
-		if transition, ok := model.Namespace()[initial.(elements.Vertex).Transitions()[0]]; ok {
-			generateTransition(builder, depth, transition.(elements.Transition), allElements, visited)
+		if transition, ok := model.Namespace()[initial.(embedded.Vertex).Transitions()[0]]; ok {
+			generateTransition(builder, depth, transition.(embedded.Transition), allElements, visited)
 		}
 	}
 	for _, element := range allElements {
 		if kinds.IsKind(element.Kind(), kinds.Transition) {
-			transition := element.(elements.Transition)
+			transition := element.(embedded.Transition)
 			if !strings.HasSuffix(transition.Source(), ".initial") {
 				generateTransition(builder, depth, transition, allElements, visited)
 			}
@@ -133,9 +135,9 @@ func generateElements(builder *strings.Builder, depth int, model elements.Model,
 	fmt.Fprintln(builder, "@enduml")
 }
 
-func Generate(writer io.Writer, model elements.Model) error {
+func Generate(writer io.Writer, model embedded.Model) error {
 	var builder strings.Builder
-	elements := []elements.Element{}
+	elements := []embedded.Element{}
 	for _, element := range model.Namespace() {
 		elements = append(elements, element)
 	}

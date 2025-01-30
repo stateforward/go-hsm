@@ -1,4 +1,4 @@
-package elements
+package embedded
 
 import (
 	"context"
@@ -11,6 +11,7 @@ type Element interface {
 	Owner() string
 	QualifiedName() string
 	Name() string
+	Id() string
 }
 
 type Model interface {
@@ -58,7 +59,7 @@ type Behavior interface {
 type StateMachine interface {
 	Element
 	State() string
-	Dispatch(event Event) bool
+	Dispatch(event Event)
 	DispatchAll(event Event)
 	Terminate()
 }
