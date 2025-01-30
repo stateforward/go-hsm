@@ -165,14 +165,6 @@ type constraint[T context.Context] struct {
 	expression func(ctx Context[T], event Event) bool
 }
 
-/******* Active *******/
-
-type active struct {
-	context.Context
-	channel chan struct{}
-	cancel  context.CancelFunc
-}
-
 /******* Events *******/
 
 type Event = embedded.Event
@@ -819,11 +811,11 @@ type Context[T context.Context] struct {
 }
 
 func (ctx Context[T]) Dispatch(event Event) {
-	if ctx.cancel != nil {
+	if ctx.processing.Load() {
+		ctx.queue.Push(event)
+	} else {
 		go ctx.HSM.Dispatch(event)
-		return
 	}
-	ctx.HSM.Dispatch(event)
 }
 
 type key struct{}
@@ -1029,6 +1021,7 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			element.action(Context[T]{
 				Context: ctx,
 				HSM:     hsm,
+				cancel:  ctx.cancel,
 			}, event)
 			ctx.channel <- struct{}{}
 		}(ctx)
