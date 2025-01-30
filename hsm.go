@@ -2,6 +2,7 @@ package hsm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path"
@@ -15,7 +16,6 @@ import (
 	"github.com/stateforward/go-hsm/kinds"
 	"github.com/stateforward/go-hsm/pkg/telemetry"
 	"github.com/stateforward/go-hsm/queue"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -25,7 +25,6 @@ type element struct {
 	kind          uint64
 	qualifiedName string
 	id            string
-	attributes    []attribute.KeyValue
 }
 
 func (element *element) Kind() uint64 {
@@ -172,6 +171,33 @@ type Event = embedded.Event
 type event struct {
 	element
 	data any
+}
+
+func (event *event) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"kind": event.kind,
+		"name": event.qualifiedName,
+		"id":   event.id,
+		"data": event.data,
+	})
+}
+
+func (event *event) UnmarshalJSON(data []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	if kind, ok := m["kind"].(uint64); ok {
+		event.kind = kind
+	}
+	if name, ok := m["name"].(string); ok {
+		event.qualifiedName = name
+	}
+	if id, ok := m["id"].(string); ok {
+		event.id = id
+	}
+	event.data = m["data"]
+	return nil
 }
 
 func (event *event) Name() string {
@@ -673,6 +699,9 @@ func Telemetry[T any](providerOrTracer T) RedifinableElement {
 		panic(fmt.Errorf("invalid telemetry provider or tracer"))
 	}
 	return func(model *Model, stack []embedded.Element) embedded.Element {
+		if len(stack) > 0 {
+			panic(fmt.Errorf("Telemetry must be called in Define()"))
+		}
 		model.trace = tracer
 		return nil
 	}
@@ -791,8 +820,10 @@ func Final(name string) RedifinableElement {
 
 type Execution = uint32
 
+type subcontext = context.Context
+
 type HSM[T context.Context] struct {
-	context.Context
+	subcontext
 	behavior[T]
 	state      embedded.Element
 	model      *Model
@@ -804,7 +835,7 @@ type HSM[T context.Context] struct {
 }
 
 type Context[T context.Context] struct {
-	context.Context
+	subcontext
 	*HSM[T]
 	cancel  context.CancelFunc
 	channel chan struct{}
@@ -841,7 +872,7 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 		all = &sync.Map{}
 	}
 	all.Store(hsm, struct{}{})
-	hsm.Context = context.WithValue(ctx, allKey, all)
+	hsm.subcontext = context.WithValue(ctx, allKey, all)
 	hsm.action = func(ctx Context[T], event Event) {
 		hsm.processing.Store(true)
 		defer hsm.processing.Store(false)
@@ -883,7 +914,7 @@ func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
 		}
 		hsm.active[element.QualifiedName()] = current
 	}
-	current.Context, current.cancel = context.WithCancel(hsm)
+	current.subcontext, current.cancel = context.WithCancel(hsm.subcontext)
 	return current
 }
 
@@ -912,8 +943,8 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 						go func(ctx *Context[T], event embedded.Event) {
 							duration := event.Data().(func(hsm Context[T]) time.Duration)(
 								Context[T]{
-									Context: ctx,
-									HSM:     hsm,
+									subcontext: ctx,
+									HSM:        hsm,
 								},
 							)
 							timer := time.NewTimer(duration)
@@ -1019,9 +1050,9 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			_, span := hsm.trace.Start(hsm, "action")
 			defer span.End()
 			element.action(Context[T]{
-				Context: ctx,
-				HSM:     hsm,
-				cancel:  ctx.cancel,
+				subcontext: ctx,
+				HSM:        hsm,
+				cancel:     ctx.cancel,
 			}, event)
 			ctx.channel <- struct{}{}
 		}(ctx)
@@ -1029,8 +1060,8 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 		_, span := hsm.trace.Start(hsm, "action")
 		defer span.End()
 		element.action(Context[T]{
-			Context: hsm.Context,
-			HSM:     hsm,
+			subcontext: hsm.subcontext,
+			HSM:        hsm,
 		}, event)
 
 	}
@@ -1045,8 +1076,8 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	defer span.End()
 	return guard.expression(
 		Context[T]{
-			Context: hsm.Context,
-			HSM:     hsm,
+			subcontext: hsm.subcontext,
+			HSM:        hsm,
 		},
 		event,
 	)
