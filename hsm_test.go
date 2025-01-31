@@ -80,7 +80,7 @@ func TestHSM(t *testing.T) {
 					hsm.Activity(mockAction("s11.activity", true)),
 					hsm.Exit(mockAction("s11.exit", false)),
 				),
-				hsm.Initial("s11", hsm.Effect(mockAction("s1.initial.effect", false))),
+				hsm.Initial(hsm.Target("s11"), hsm.Effect(mockAction("s1.initial.effect", false))),
 				hsm.Exit(mockAction("s1.exit", false)),
 				hsm.Entry(mockAction("s1.entry", false)),
 				hsm.Activity(mockAction("s1.activity", true)),
@@ -95,7 +95,7 @@ func TestHSM(t *testing.T) {
 					return check
 				},
 			)),
-			hsm.Initial("s1/s11", hsm.Effect(mockAction("s.initial.effect", false))),
+			hsm.Initial(hsm.Target("s1/s11"), hsm.Effect(mockAction("s.initial.effect", false))),
 			hsm.State("s2",
 				hsm.Entry(mockAction("s2.entry", false)),
 				hsm.Activity(mockAction("s2.activity", true)),
@@ -107,13 +107,13 @@ func TestHSM(t *testing.T) {
 						hsm.Exit(mockAction("s211.exit", false)),
 						hsm.Transition(hsm.Trigger("G"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s211.G.transition.effect", false))),
 					),
-					hsm.Initial("s211", hsm.Effect(mockAction("s21.initial.effect", false))),
+					hsm.Initial(hsm.Target("s211"), hsm.Effect(mockAction("s21.initial.effect", false))),
 					hsm.Entry(mockAction("s21.entry", false)),
 					hsm.Activity(mockAction("s21.activity", true)),
 					hsm.Exit(mockAction("s21.exit", false)),
 					hsm.Transition(hsm.Trigger("A"), hsm.Target("/s/s2/s21")), // self transition
 				),
-				hsm.Initial("s21/s211", hsm.Effect(mockAction("s2.initial.effect", false))),
+				hsm.Initial(hsm.Target("s21/s211"), hsm.Effect(mockAction("s2.initial.effect", false))),
 				hsm.Transition(hsm.Trigger("C"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s2.C.transition.effect", false))),
 			),
 			hsm.State("s3",
@@ -124,10 +124,10 @@ func TestHSM(t *testing.T) {
 			hsm.Transition(hsm.Trigger(`*.P.*`), hsm.Effect(mockAction("s11.P.transition.effect", false))),
 		),
 		hsm.Initial(
-			hsm.Choice(
+			hsm.Target(hsm.Choice(
 				"initial_choice",
 				hsm.Transition(hsm.Target("/s/s2")),
-			), hsm.Effect(mockAction("initial.effect", false))),
+			)), hsm.Effect(mockAction("initial.effect", false))),
 		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1"), hsm.Target("/s"), hsm.Effect(mockAction("s1.D.transition.effect", false)), hsm.Guard(
 			func(ctx hsm.Context[*storage], event hsm.Event) bool {
 				check := ctx.Storage.foo == 0
@@ -351,7 +351,7 @@ func TestHSMDispatchAll(t *testing.T) {
 		hsm.State("bar"),
 		hsm.Transition(hsm.Trigger("foo"), hsm.Source("foo"), hsm.Target("bar")),
 		hsm.Transition(hsm.Trigger("bar"), hsm.Source("bar"), hsm.Target("foo")),
-		hsm.Initial("foo"),
+		hsm.Initial(hsm.Target("foo")),
 	)
 	ctx := context.Background()
 	sm1 := hsm.New(ctx, &model)
@@ -440,7 +440,7 @@ var benchModel = hsm.Define(
 		hsm.Target("foo"),
 		hsm.Effect(noBehavior),
 	),
-	hsm.Initial("foo", hsm.Effect(noBehavior)),
+	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
 var benchSM = hsm.New(context.Background(), &benchModel)

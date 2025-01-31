@@ -553,34 +553,27 @@ func Guard[T context.Context](fn func(hsm Context[T], event Event) bool, maybeNa
 }
 
 func Initial[T interface{ string | RedifinableElement }](elementOrName T, partialElements ...RedifinableElement) RedifinableElement {
+	name := ".initial"
+	switch any(elementOrName).(type) {
+	case string:
+		name = any(elementOrName).(string)
+	case RedifinableElement:
+		partialElements = append([]RedifinableElement{any(elementOrName).(RedifinableElement)}, partialElements...)
+	}
 	return func(model *Model, stack []embedded.Element) embedded.Element {
-		owner := find(stack, kinds.StateMachine, kinds.State)
+		owner := find(stack, kinds.State)
 		if owner == nil {
-			panic(fmt.Errorf("initial must be called within a Model or State"))
+			panic(fmt.Errorf("initial must be called within a State"))
 		}
 		initial := &vertex{
-			element: element{kind: kinds.Initial, qualifiedName: path.Join(owner.QualifiedName(), ".initial")},
+			element: element{kind: kinds.Initial, qualifiedName: path.Join(owner.QualifiedName(), name)},
 		}
 		if model.namespace[initial.QualifiedName()] != nil {
-			panic(fmt.Errorf("initial state already exists"))
-		}
-		var target string
-		switch any(elementOrName).(type) {
-		case string:
-			if !path.IsAbs(any(elementOrName).(string)) {
-				target = path.Join(owner.QualifiedName(), any(elementOrName).(string))
-			} else {
-				target = any(elementOrName).(string)
-			}
-		case RedifinableElement:
-			maybeTarget := any(elementOrName).(RedifinableElement)(model, stack)
-			if maybeTarget != nil {
-				target = maybeTarget.QualifiedName()
-			}
+			panic(fmt.Errorf("initial %s state already exists for %s", initial.QualifiedName(), owner.QualifiedName()))
 		}
 		model.namespace[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
-		transition := (Transition(Target(target), append(partialElements, Source(initial.QualifiedName()))...)(model, stack)).(*transition)
+		transition := (Transition(Source(initial.QualifiedName()), partialElements...)(model, stack)).(*transition)
 		// validation logic
 		if transition.guard != "" {
 			panic(fmt.Errorf("initial %s cannot have a guard", initial.QualifiedName()))
