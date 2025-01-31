@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/stateforward/go-hsm/embedded"
-	"github.com/stateforward/go-hsm/kinds"
+	"github.com/stateforward/go-hsm/kind"
 )
 
 type Queue struct {
@@ -29,7 +29,7 @@ func (q *Queue) Pop() embedded.Event {
 
 func (q *Queue) Push(event embedded.Event) {
 	events := *q.events.Load()
-	if kinds.IsKind(event.Kind(), kinds.CompletionEvent) {
+	if kind.IsKind(event.Kind(), kind.CompletionEvent) {
 		events = append(events[q.partition:], append([]embedded.Event{event}, events[:q.partition]...)...)
 		q.partition++
 	} else {
