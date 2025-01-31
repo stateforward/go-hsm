@@ -972,7 +972,7 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 				for _, event := range element.Events() {
 					switch event.Kind() {
 					case kind.TimeEvent:
-						ctx := hsm.activate(element)
+						ctx := hsm.activate(event)
 						go func(ctx *Context[T], event embedded.Event) {
 							duration := event.Data().(func(hsm Context[T]) time.Duration)(
 								Context[T]{
@@ -989,6 +989,7 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 							case <-hsm.Done():
 								break
 							case <-timer.C:
+								timer.Stop()
 								hsm.Dispatch(event)
 								break
 							}
