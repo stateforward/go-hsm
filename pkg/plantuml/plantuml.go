@@ -14,7 +14,7 @@ import (
 )
 
 func idFromQualifiedName(qualifiedName string) string {
-	return strings.ReplaceAll(path.Clean(strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(qualifiedName, "/"), "."), "-", "_")), "/", ".")
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(qualifiedName, "/"), "."), "-", "_"), "/.", "/"), "/", ".")
 }
 
 func generateState(builder *strings.Builder, depth int, state embedded.Element, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
