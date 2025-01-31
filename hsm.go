@@ -14,9 +14,7 @@ import (
 
 	"github.com/stateforward/go-hsm/embedded"
 	"github.com/stateforward/go-hsm/kinds"
-	"github.com/stateforward/go-hsm/pkg/telemetry"
 	"github.com/stateforward/go-hsm/queue"
-	"go.opentelemetry.io/otel/trace"
 )
 
 /******* Element *******/
@@ -64,11 +62,12 @@ func (element *element) QualifiedName() string {
 
 /******* Model *******/
 
+type Element = embedded.Element
+
 type Model struct {
 	state
 	namespace map[string]embedded.Element
 	elements  []RedifinableElement
-	trace     trace.Tracer
 }
 
 func (model *Model) Namespace() map[string]embedded.Element {
@@ -223,11 +222,10 @@ func apply(model *Model, stack []embedded.Element, partials ...RedifinableElemen
 func Define(name string, redifinableElements ...RedifinableElement) Model {
 	model := Model{
 		state: state{
-			vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/"}, transitions: []string{}},
+			vertex: vertex{element: element{kind: kinds.State, qualifiedName: "/", id: name}, transitions: []string{}},
 		},
 		namespace: map[string]embedded.Element{},
 		elements:  redifinableElements,
-		trace:     telemetry.NewProvider().Tracer("hsm"),
 	}
 
 	stack := []embedded.Element{&model}
@@ -236,7 +234,6 @@ func Define(name string, redifinableElements ...RedifinableElement) Model {
 		model.elements = []RedifinableElement{}
 		apply(&model, stack, elements...)
 	}
-	model.id = name
 	return model
 }
 
@@ -366,7 +363,6 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 		}
 		sourceElement, ok := model.namespace[transition.source]
 		if !ok {
-			slog.Error("missing source", "id", transition.source)
 			panic(fmt.Errorf("missing source %s", transition.source))
 		}
 		switch source := sourceElement.(type) {
@@ -433,7 +429,6 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 				return transition
 			})
 		}
-
 		return transition
 	}
 }
@@ -688,24 +683,22 @@ func Activity[T context.Context](fn func(ctx Context[T], event Event), maybeName
 	}
 }
 
-func Telemetry[T any](providerOrTracer T) RedifinableElement {
-	var tracer trace.Tracer
-	switch unknown := any(providerOrTracer).(type) {
-	case trace.TracerProvider:
-		tracer = unknown.Tracer("hsm")
-	case trace.Tracer:
-		tracer = unknown
-	default:
-		panic(fmt.Errorf("invalid telemetry provider or tracer"))
-	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
-		if len(stack) > 0 {
-			panic(fmt.Errorf("Telemetry must be called in Define()"))
-		}
-		model.trace = tracer
-		return nil
-	}
-}
+// func Telemetry[T any](providerOrTracer T) RedifinableElement {
+// 	return func(model *Model, stack []embedded.Element) embedded.Element {
+// 		if len(stack) > 0 {
+// 			panic(fmt.Errorf("Telemetry must be called in Define()"))
+// 		}
+// 		switch unknown := any(providerOrTracer).(type) {
+// 		case trace.TracerProvider:
+// 			tracer = unknown.Tracer(model.id)
+// 		case trace.Tracer:
+// 			tracer = unknown
+// 		default:
+// 			panic(fmt.Errorf("invalid telemetry provider or tracer"))
+// 		}
+// 		return nil
+// 	}
+// }
 
 func Exit[T context.Context](fn func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".exit"
@@ -771,24 +764,24 @@ func After[T context.Context](expr func(hsm Context[T]) time.Duration, maybeName
 	}
 }
 
-func Interval[T context.Context](expr func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
-	name := ".interval"
-	if len(maybeName) > 0 {
-		name = maybeName[0]
-	}
-	return func(builder *Model, stack []embedded.Element) embedded.Element {
-		owner := find(stack, kinds.Transition)
-		if owner == nil {
-			panic(fmt.Errorf("after must be called within a Transition"))
-		}
-		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
-		owner.(*transition).events = append(owner.(*transition).events, &event{
-			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
-			data:    expr,
-		})
-		return owner
-	}
-}
+// func Interval[T context.Context](expr func(ctx Context[T], event Event), maybeName ...string) RedifinableElement {
+// 	name := ".interval"
+// 	if len(maybeName) > 0 {
+// 		name = maybeName[0]
+// 	}
+// 	return func(builder *Model, stack []embedded.Element) embedded.Element {
+// 		owner := find(stack, kinds.Transition)
+// 		if owner == nil {
+// 			panic(fmt.Errorf("after must be called within a Transition"))
+// 		}
+// 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
+// 		owner.(*transition).events = append(owner.(*transition).events, &event{
+// 			element: element{kind: kinds.TimeEvent, qualifiedName: qualifiedName},
+// 			data:    expr,
+// 		})
+// 		return owner
+// 	}
+// }
 
 var pool = sync.Pool{
 	New: func() any {
@@ -822,6 +815,15 @@ type Execution = uint32
 
 type subcontext = context.Context
 
+/*** Trace ***/
+
+func traceEnd(...any) {}
+
+//go:inline
+func traceBegin(ctx context.Context, step string, element embedded.Element) func(...any) {
+	return traceEnd
+}
+
 type HSM[T context.Context] struct {
 	subcontext
 	behavior[T]
@@ -830,7 +832,7 @@ type HSM[T context.Context] struct {
 	active     map[string]*Context[T]
 	queue      *queue.Queue
 	processing atomic.Bool
-	trace      trace.Tracer
+	trace      Trace
 	Storage    T
 }
 
@@ -849,11 +851,17 @@ func (ctx Context[T]) Dispatch(event Event) {
 	}
 }
 
+type Trace func(ctx context.Context, step string, element embedded.Element) func(...any)
+
 type key struct{}
 
 var allKey = key{}
 
-func New[T context.Context](ctx T, model *Model) *HSM[T] {
+func New[T context.Context](ctx T, model *Model, maybeTrace ...Trace) *HSM[T] {
+	trace := traceBegin
+	if len(maybeTrace) > 0 {
+		trace = maybeTrace[0]
+	}
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -864,7 +872,7 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 		model:   model,
 		active:  map[string]*Context[T]{},
 		Storage: ctx,
-		trace:   model.trace,
+		trace:   trace,
 		queue:   queue.New(),
 	}
 	all, ok := ctx.Value(allKey).(*sync.Map)
@@ -904,6 +912,11 @@ func (hsm *HSM[T]) Terminate() {
 			break
 		}
 	}
+	all, ok := hsm.Value(allKey).(*sync.Map)
+	if !ok {
+		return
+	}
+	all.Delete(hsm)
 }
 
 func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
@@ -922,8 +935,7 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 	if hsm == nil {
 		return nil
 	}
-	_, span := hsm.trace.Start(hsm, "enter")
-	defer span.End()
+	defer hsm.trace(hsm, "enter", element)
 	switch element.Kind() {
 	case kinds.State:
 		state := element.(*state)
@@ -988,8 +1000,7 @@ func (hsm *HSM[T]) initial(element embedded.Element, event Event) embedded.Eleme
 	if hsm == nil || element == nil {
 		return nil
 	}
-	_, span := hsm.trace.Start(hsm, "initial")
-	defer span.End()
+	defer hsm.trace(hsm, "initial", element)
 	var qualifiedName string
 	if element.QualifiedName() == "/" {
 		qualifiedName = "/.initial"
@@ -1010,8 +1021,7 @@ func (hsm *HSM[T]) exit(element embedded.Element, event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
-	_, span := hsm.trace.Start(hsm, "exit")
-	defer span.End()
+	defer hsm.trace(hsm, "exit", element)
 	if state, ok := element.(*state); ok {
 		for _, qualifiedName := range state.transitions {
 			if element := get[*transition](hsm.model, qualifiedName); element != nil {
@@ -1041,14 +1051,12 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
-	_, span := hsm.trace.Start(hsm, "execute")
-	defer span.End()
+	defer hsm.trace(hsm, "execute", element)
 	switch element.Kind() {
 	case kinds.Concurrent:
 		ctx := hsm.activate(element)
 		go func(ctx *Context[T]) {
-			_, span := hsm.trace.Start(hsm, "action")
-			defer span.End()
+			defer hsm.trace(hsm, "action", element)
 			element.action(Context[T]{
 				subcontext: ctx,
 				HSM:        hsm,
@@ -1057,8 +1065,7 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			ctx.channel <- struct{}{}
 		}(ctx)
 	default:
-		_, span := hsm.trace.Start(hsm, "action")
-		defer span.End()
+		defer hsm.trace(hsm, "action", element)
 		element.action(Context[T]{
 			subcontext: hsm.subcontext,
 			HSM:        hsm,
@@ -1072,8 +1079,7 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	if hsm == nil || guard == nil || guard.expression == nil {
 		return true
 	}
-	_, span := hsm.trace.Start(hsm, "evaluate")
-	defer span.End()
+	defer hsm.trace(hsm, "evaluate", guard)
 	return guard.expression(
 		Context[T]{
 			subcontext: hsm.subcontext,
@@ -1087,8 +1093,7 @@ func (hsm *HSM[T]) transition(current embedded.Element, transition *transition, 
 	if hsm == nil {
 		return nil
 	}
-	_, span := hsm.trace.Start(hsm, "transition")
-	defer span.End()
+	defer hsm.trace(hsm, "transition", transition)
 	path, ok := transition.paths[current.QualifiedName()]
 	if !ok {
 		return nil
@@ -1128,8 +1133,7 @@ func (hsm *HSM[T]) terminate(behavior *behavior[T]) {
 	if hsm == nil || behavior == nil {
 		return
 	}
-	_, span := hsm.trace.Start(hsm, "terminate")
-	defer span.End()
+	defer hsm.trace(hsm, "terminate", behavior)
 	active, ok := hsm.active[behavior.QualifiedName()]
 	if !ok {
 		return
@@ -1191,8 +1195,7 @@ func (hsm *HSM[T]) Dispatch(event Event) {
 	if hsm == nil {
 		return
 	}
-	_, span := hsm.trace.Start(hsm, "Dispatch")
-	defer span.End()
+	defer hsm.trace(hsm, "Dispatch", event)
 	if hsm.state == nil {
 		return
 	}
@@ -1208,9 +1211,9 @@ func (hsm *HSM[T]) DispatchAll(event Event) {
 	if !ok {
 		return
 	}
-	_, span := hsm.trace.Start(hsm, "DispatchAll")
-	go func(active *sync.Map, span trace.Span) {
-		defer span.End()
+	end := hsm.trace(hsm, "DispatchAll", event)
+	go func(active *sync.Map, end func(...any)) {
+		defer end()
 		active.Range(func(value any, _ any) bool {
 			sm, ok := value.(embedded.Context)
 			if !ok {
@@ -1219,6 +1222,6 @@ func (hsm *HSM[T]) DispatchAll(event Event) {
 			sm.Dispatch(event)
 			return true
 		})
-	}(active, span)
+	}(active, end)
 
 }

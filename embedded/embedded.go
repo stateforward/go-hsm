@@ -59,12 +59,11 @@ type Behavior interface {
 type StateMachine interface {
 	Element
 	State() string
-	Dispatch(event Event)
-	DispatchAll(event Event)
 	Terminate()
 }
 
 type Context interface {
-	StateMachine
 	context.Context
+	Dispatch(event Event)
+	DispatchAll(event Event)
 }
