@@ -625,10 +625,17 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 		if owner == nil {
 			panic(fmt.Errorf("choice must be called within a State or Transition"))
 		} else if kind.IsKind(owner.Kind(), kind.Transition) {
-			source := owner.(*transition).source
+			transition := owner.(*transition)
+			source := transition.source
 			owner = model.namespace[source]
 			if owner == nil {
-				panic(fmt.Errorf("missing source %s", source))
+				panic(fmt.Errorf("you must specifiy a source when defining a choice within transition %s, with target %s", transition.QualifiedName(), transition.target))
+			} else if kind.IsKind(owner.Kind(), kind.Pseudostate) {
+				// pseudostates aren't a namespace, so we need to find the containing state
+				owner = find(stack, kind.State)
+				if owner == nil {
+					panic(fmt.Errorf("choice must be called within a State"))
+				}
 			}
 		}
 		if name == "" {
