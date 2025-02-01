@@ -796,8 +796,6 @@ func Final(name string) RedifinableElement {
 	}
 }
 
-type Execution = uint32
-
 type subcontext = context.Context
 
 type HSM[T context.Context] struct {
@@ -808,8 +806,8 @@ type HSM[T context.Context] struct {
 	active     map[string]*Context[T]
 	queue      *queue.Queue
 	processing atomic.Bool
-	trace      Trace
 	Storage    T
+	trace      Trace
 }
 
 type Context[T context.Context] struct {
@@ -829,19 +827,16 @@ func (ctx Context[T]) Dispatch(event Event) {
 
 type Trace func(ctx context.Context, step string, elements ...embedded.Element) func(...any)
 
-type Parameter[T context.Context] func(hsm *HSM[T])
-
-func WithTrace[T context.Context](trace Trace) Parameter[T] {
-	return func(hsm *HSM[T]) {
-		hsm.trace = trace
-	}
+func WithTrace[T context.Context](hsm *HSM[T], trace Trace) *HSM[T] {
+	hsm.trace = trace
+	return hsm
 }
 
 type key struct{}
 
 var allKey = key{}
 
-func New[T context.Context](ctx T, model *Model, parameters ...Parameter[T]) *HSM[T] {
+func New[T context.Context](ctx T, model *Model) *HSM[T] {
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -853,9 +848,6 @@ func New[T context.Context](ctx T, model *Model, parameters ...Parameter[T]) *HS
 		active:  map[string]*Context[T]{},
 		Storage: ctx,
 		queue:   queue.New(),
-	}
-	for _, parameter := range parameters {
-		parameter(hsm)
 	}
 	all, ok := ctx.Value(allKey).(*sync.Map)
 	if !ok {
@@ -956,10 +948,10 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 								break
 							case <-timer.C:
 								timer.Stop()
+								ctx.channel <- struct{}{}
 								hsm.Dispatch(event)
 								break
 							}
-							ctx.channel <- struct{}{}
 						}(ctx, event)
 					}
 				}
@@ -1043,15 +1035,16 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
+	var end func(...any)
 	if hsm.trace != nil {
-		defer hsm.trace(hsm, "execute", element)()
+		end = hsm.trace(hsm, "execute", element)
 	}
 	switch element.Kind() {
 	case kind.Concurrent:
 		ctx := hsm.activate(element)
-		go func(ctx *Context[T]) {
-			if hsm.trace != nil {
-				defer hsm.trace(ctx, "action", element)()
+		go func(ctx *Context[T], end func(...any)) {
+			if end != nil {
+				defer end()
 			}
 			element.action(Context[T]{
 				subcontext: ctx,
@@ -1059,10 +1052,10 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 				cancel:     ctx.cancel,
 			}, event)
 			ctx.channel <- struct{}{}
-		}(ctx)
+		}(ctx, end)
 	default:
-		if hsm.trace != nil {
-			defer hsm.trace(hsm, "action", element)()
+		if end != nil {
+			defer end()
 		}
 		element.action(Context[T]{
 			subcontext: hsm.subcontext,
