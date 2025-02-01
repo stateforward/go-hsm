@@ -832,9 +832,13 @@ func WithTrace[T context.Context](hsm *HSM[T], trace Trace) *HSM[T] {
 	return hsm
 }
 
-type key struct{}
+type key[T any] struct{}
 
-var allKey = key{}
+var Keys = struct {
+	All key[*sync.Map]
+}{
+	All: key[*sync.Map]{},
+}
 
 func New[T context.Context](ctx T, model *Model) *HSM[T] {
 	hsm := &HSM[T]{
@@ -849,12 +853,12 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 		Storage: ctx,
 		queue:   queue.New(),
 	}
-	all, ok := ctx.Value(allKey).(*sync.Map)
+	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
 		all = &sync.Map{}
 	}
 	all.Store(hsm, struct{}{})
-	hsm.subcontext = context.WithValue(ctx, allKey, all)
+	hsm.subcontext = context.WithValue(ctx, Keys.All, all)
 	hsm.action = func(ctx Context[T], event Event) {
 		hsm.processing.Store(true)
 		defer hsm.processing.Store(false)
@@ -889,7 +893,7 @@ func (hsm *HSM[T]) Terminate() {
 			break
 		}
 	}
-	all, ok := hsm.Value(allKey).(*sync.Map)
+	all, ok := hsm.Value(Keys.All).(*sync.Map)
 	if !ok {
 		return
 	}
@@ -1203,7 +1207,7 @@ func (hsm *HSM[T]) Dispatch(event Event) {
 }
 
 func (hsm *HSM[T]) DispatchAll(event Event) {
-	active, ok := hsm.Value(allKey).(*sync.Map)
+	active, ok := hsm.Value(Keys.All).(*sync.Map)
 	if !ok {
 		return
 	}
