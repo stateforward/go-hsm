@@ -831,8 +831,8 @@ type Trace func(ctx context.Context, step string, elements ...embedded.Element) 
 
 type Parameter[T context.Context] func(hsm *HSM[T])
 
-func WithTrace(trace Trace) Parameter[context.Context] {
-	return func(hsm *HSM[context.Context]) {
+func WithTrace[T context.Context](trace Trace) Parameter[T] {
+	return func(hsm *HSM[T]) {
 		hsm.trace = trace
 	}
 }
