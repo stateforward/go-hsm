@@ -829,11 +829,19 @@ func (ctx Context[T]) Dispatch(event Event) {
 
 type Trace func(ctx context.Context, step string, elements ...embedded.Element) func(...any)
 
+type Parameter[T context.Context] func(hsm *HSM[T])
+
+func WithTrace(trace Trace) Parameter[context.Context] {
+	return func(hsm *HSM[context.Context]) {
+		hsm.trace = trace
+	}
+}
+
 type key struct{}
 
 var allKey = key{}
 
-func New[T context.Context](ctx T, model *Model) *HSM[T] {
+func New[T context.Context](ctx T, model *Model, parameters ...Parameter[T]) *HSM[T] {
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -845,6 +853,9 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 		active:  map[string]*Context[T]{},
 		Storage: ctx,
 		queue:   queue.New(),
+	}
+	for _, parameter := range parameters {
+		parameter(hsm)
 	}
 	all, ok := ctx.Value(allKey).(*sync.Map)
 	if !ok {
