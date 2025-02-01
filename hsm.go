@@ -900,7 +900,7 @@ func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
 	current, ok := hsm.active[element.QualifiedName()]
 	if !ok {
 		current = &Context[T]{
-			channel: make(chan struct{}),
+			channel: make(chan struct{}, 1),
 		}
 		hsm.active[element.QualifiedName()] = current
 	}
@@ -942,15 +942,13 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 							defer timer.Stop()
 							select {
 							case <-ctx.Done():
-								ctx.channel <- struct{}{}
 								break
 							case <-hsm.Done():
 								break
 							case <-timer.C:
 								timer.Stop()
-								ctx.channel <- struct{}{}
 								hsm.Dispatch(event)
-								break
+								return
 							}
 						}(ctx, event)
 					}
@@ -1015,7 +1013,6 @@ func (hsm *HSM[T]) exit(element embedded.Element, event Event) {
 						active, ok := hsm.active[event.QualifiedName()]
 						if ok {
 							active.cancel()
-							<-active.channel
 						}
 					}
 				}
