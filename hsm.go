@@ -163,14 +163,14 @@ func (transition *transition) Target() string {
 
 type behavior[T context.Context] struct {
 	element
-	action func(hsm HSM[T], event Event)
+	method func(hsm Active[T], event Event)
 }
 
 /******* Constraint *******/
 
 type constraint[T context.Context] struct {
 	element
-	expression func(hsm HSM[T], event Event) bool
+	expression func(hsm Active[T], event Event) bool
 }
 
 /******* Events *******/
@@ -532,7 +532,7 @@ func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 	}
 }
 
-func Effect[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...string) RedifinableElement {
+func Effect[T context.Context](fn func(hsm Active[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".effect"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -545,7 +545,7 @@ func Effect[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...st
 		}
 		behavior := &behavior[T]{
 			element: element{kind: kind.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
-			action:  fn,
+			method:  fn,
 		}
 		model.namespace[behavior.QualifiedName()] = behavior
 		owner.(*transition).effect = behavior.QualifiedName()
@@ -553,7 +553,7 @@ func Effect[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...st
 	}
 }
 
-func Guard[T context.Context](fn func(hsm HSM[T], event Event) bool, maybeName ...string) RedifinableElement {
+func Guard[T context.Context](fn func(hsm Active[T], event Event) bool, maybeName ...string) RedifinableElement {
 	name := ".guard"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -661,7 +661,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 	}
 }
 
-func Entry[T context.Context](fn func(ctx HSM[T], event Event), maybeName ...string) RedifinableElement {
+func Entry[T context.Context](fn func(ctx Active[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".entry"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -674,7 +674,7 @@ func Entry[T context.Context](fn func(ctx HSM[T], event Event), maybeName ...str
 		}
 		element := &behavior[T]{
 			element: element{kind: kind.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
-			action:  fn,
+			method:  fn,
 		}
 		model.namespace[element.QualifiedName()] = element
 		owner.(*state).entry = element.QualifiedName()
@@ -682,7 +682,7 @@ func Entry[T context.Context](fn func(ctx HSM[T], event Event), maybeName ...str
 	}
 }
 
-func Activity[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...string) RedifinableElement {
+func Activity[T context.Context](fn func(hsm Active[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".activity"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -696,7 +696,7 @@ func Activity[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...
 
 		element := &behavior[T]{
 			element: element{kind: kind.Concurrent, qualifiedName: path.Join(owner.QualifiedName(), name)},
-			action:  fn,
+			method:  fn,
 		}
 		model.namespace[element.QualifiedName()] = element
 		owner.(*state).activity = element.QualifiedName()
@@ -704,7 +704,7 @@ func Activity[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...
 	}
 }
 
-func Exit[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...string) RedifinableElement {
+func Exit[T context.Context](fn func(hsm Active[T], event Event), maybeName ...string) RedifinableElement {
 	name := ".exit"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -718,7 +718,7 @@ func Exit[T context.Context](fn func(hsm HSM[T], event Event), maybeName ...stri
 
 		element := &behavior[T]{
 			element: element{kind: kind.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
-			action:  fn,
+			method:  fn,
 		}
 		model.namespace[element.QualifiedName()] = element
 		owner.(*state).exit = element.QualifiedName()
@@ -749,7 +749,7 @@ func Trigger[T interface{ string | *event }](events ...T) RedifinableElement {
 	}
 }
 
-func After[T context.Context](expr func(hsm HSM[T]) time.Duration, maybeName ...string) RedifinableElement {
+func After[T context.Context](expr func(hsm Active[T]) time.Duration, maybeName ...string) RedifinableElement {
 	name := ".after"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -798,33 +798,35 @@ func Final(name string) RedifinableElement {
 
 type subcontext = context.Context
 
-type statemachine[T context.Context] struct {
+type HSM[T context.Context] struct {
+	subcontext
 	behavior[T]
 	state      embedded.Element
 	model      *Model
-	active     map[string]*active[T]
+	active     map[string]*Active[T]
 	queue      *queue.Queue
 	processing atomic.Bool
 	Context    T
 	trace      Trace
 }
 
-type HSM[T context.Context] struct {
-	subcontext
-	*statemachine[T]
-}
+// type HSM[T context.Context] struct {
+// 	subcontext
+// 	*statemachine[T]
+// }
 
-type active[T context.Context] struct {
+type Active[T context.Context] struct {
 	subcontext
+	*HSM[T]
 	cancel  context.CancelFunc
 	channel chan struct{}
 }
 
-func (ctx *HSM[T]) Dispatch(event Event) {
-	if ctx.processing.Load() {
-		ctx.queue.Push(event)
+func (active *Active[T]) Dispatch(event Event) {
+	if active.cancel != nil {
+		go active.HSM.Dispatch(event)
 	} else {
-		ctx.statemachine.dispatch(event)
+		active.HSM.Dispatch(event)
 	}
 }
 
@@ -845,20 +847,18 @@ var Keys = struct {
 	HSM: key[*HSM[context.Context]]{},
 }
 
-func Make[T context.Context](ctx T, model *Model) HSM[T] {
-	hsm := HSM[T]{
-		statemachine: &statemachine[T]{
-			behavior: behavior[T]{
-				element: element{
-					kind:          kind.StateMachine,
-					qualifiedName: model.QualifiedName(),
-				},
+func New[T context.Context](ctx T, model *Model) *HSM[T] {
+	hsm := &HSM[T]{
+		behavior: behavior[T]{
+			element: element{
+				kind:          kind.StateMachine,
+				qualifiedName: model.QualifiedName(),
 			},
-			model:   model,
-			active:  map[string]*active[T]{},
-			Context: ctx,
-			queue:   queue.New(),
 		},
+		model:   model,
+		active:  map[string]*Active[T]{},
+		Context: ctx,
+		queue:   queue.New(),
 	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
@@ -866,7 +866,7 @@ func Make[T context.Context](ctx T, model *Model) HSM[T] {
 	}
 	all.Store(hsm, struct{}{})
 	hsm.subcontext = context.WithValue(ctx, Keys.All, all)
-	hsm.action = func(_ HSM[T], event Event) {
+	hsm.method = func(_ Active[T], event Event) {
 		hsm.processing.Store(true)
 		defer hsm.processing.Store(false)
 		hsm.state = hsm.initial(&model.state, event)
@@ -875,7 +875,7 @@ func Make[T context.Context](ctx T, model *Model) HSM[T] {
 	return hsm
 }
 
-func (sm *statemachine[T]) State() string {
+func (sm *HSM[T]) State() string {
 	if sm == nil {
 		return ""
 	}
@@ -885,7 +885,7 @@ func (sm *statemachine[T]) State() string {
 	return sm.state.QualifiedName()
 }
 
-func (sm *statemachine[T]) Terminate() {
+func (sm *HSM[T]) Terminate() {
 	if sm == nil {
 		return
 	}
@@ -907,10 +907,10 @@ func (sm *statemachine[T]) Terminate() {
 	// all.Delete(sm)
 }
 
-func (sm *statemachine[T]) activate(element embedded.Element) *active[T] {
+func (sm *HSM[T]) activate(element embedded.Element) *Active[T] {
 	current, ok := sm.active[element.QualifiedName()]
 	if !ok {
-		current = &active[T]{
+		current = &Active[T]{
 			channel: make(chan struct{}, 1),
 		}
 		sm.active[element.QualifiedName()] = current
@@ -919,7 +919,7 @@ func (sm *statemachine[T]) activate(element embedded.Element) *active[T] {
 	return current
 }
 
-func (sm *statemachine[T]) enter(element embedded.Element, event Event, defaultEntry bool) embedded.Element {
+func (sm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry bool) embedded.Element {
 	if sm == nil {
 		return nil
 	}
@@ -942,11 +942,11 @@ func (sm *statemachine[T]) enter(element embedded.Element, event Event, defaultE
 					switch event.Kind() {
 					case kind.TimeEvent:
 						ctx := sm.activate(event)
-						go func(ctx *active[T], event embedded.Event) {
-							duration := event.Data().(func(hsm HSM[T]) time.Duration)(
-								HSM[T]{
-									subcontext:   ctx,
-									statemachine: sm,
+						go func(ctx *Active[T], event embedded.Event) {
+							duration := event.Data().(func(hsm Active[T]) time.Duration)(
+								Active[T]{
+									subcontext: ctx,
+									HSM:        sm,
 								},
 							)
 							timer := time.NewTimer(duration)
@@ -958,7 +958,7 @@ func (sm *statemachine[T]) enter(element embedded.Element, event Event, defaultE
 								break
 							case <-timer.C:
 								timer.Stop()
-								sm.dispatch(event)
+								sm.Dispatch(event)
 								return
 							}
 						}(ctx, event)
@@ -985,7 +985,7 @@ func (sm *statemachine[T]) enter(element embedded.Element, event Event, defaultE
 	return nil
 }
 
-func (sm *statemachine[T]) initial(element embedded.Element, event Event) embedded.Element {
+func (sm *HSM[T]) initial(element embedded.Element, event Event) embedded.Element {
 	if sm == nil || element == nil {
 		return nil
 	}
@@ -1008,7 +1008,7 @@ func (sm *statemachine[T]) initial(element embedded.Element, event Event) embedd
 	return element
 }
 
-func (sm *statemachine[T]) exit(element embedded.Element, event Event) {
+func (sm *HSM[T]) exit(element embedded.Element, event Event) {
 	if sm == nil || element == nil {
 		return
 	}
@@ -1039,7 +1039,7 @@ func (sm *statemachine[T]) exit(element embedded.Element, event Event) {
 
 }
 
-func (sm *statemachine[T]) execute(element *behavior[T], event Event) {
+func (sm *HSM[T]) execute(element *behavior[T], event Event) {
 	if sm == nil || element == nil {
 		return
 	}
@@ -1050,13 +1050,13 @@ func (sm *statemachine[T]) execute(element *behavior[T], event Event) {
 	switch element.Kind() {
 	case kind.Concurrent:
 		ctx := sm.activate(element)
-		go func(ctx *active[T], end func(...any)) {
+		go func(ctx *Active[T], end func(...any)) {
 			if end != nil {
 				defer end()
 			}
-			element.action(HSM[T]{
-				subcontext:   ctx,
-				statemachine: sm,
+			element.method(Active[T]{
+				subcontext: ctx,
+				HSM:        sm,
 			}, event)
 			ctx.channel <- struct{}{}
 		}(ctx, end)
@@ -1064,16 +1064,16 @@ func (sm *statemachine[T]) execute(element *behavior[T], event Event) {
 		if end != nil {
 			defer end()
 		}
-		element.action(HSM[T]{
-			subcontext:   sm.Context,
-			statemachine: sm,
+		element.method(Active[T]{
+			subcontext: sm.Context,
+			HSM:        sm,
 		}, event)
 
 	}
 
 }
 
-func (sm *statemachine[T]) evaluate(guard *constraint[T], event Event) bool {
+func (sm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 	if sm == nil || guard == nil || guard.expression == nil {
 		return true
 	}
@@ -1081,15 +1081,15 @@ func (sm *statemachine[T]) evaluate(guard *constraint[T], event Event) bool {
 		defer sm.trace(sm.Context, "evaluate", guard)()
 	}
 	return guard.expression(
-		HSM[T]{
-			subcontext:   sm.Context,
-			statemachine: sm,
+		Active[T]{
+			subcontext: sm.Context,
+			HSM:        sm,
 		},
 		event,
 	)
 }
 
-func (sm *statemachine[T]) transition(current embedded.Element, transition *transition, event Event) embedded.Element {
+func (sm *HSM[T]) transition(current embedded.Element, transition *transition, event Event) embedded.Element {
 	if sm == nil {
 		return nil
 	}
@@ -1131,7 +1131,7 @@ func (sm *statemachine[T]) transition(current embedded.Element, transition *tran
 	return current
 }
 
-func (sm *statemachine[T]) terminate(behavior *behavior[T]) {
+func (sm *HSM[T]) terminate(behavior *behavior[T]) {
 	if sm == nil || behavior == nil {
 		return
 	}
@@ -1147,7 +1147,7 @@ func (sm *statemachine[T]) terminate(behavior *behavior[T]) {
 
 }
 
-func (sm *statemachine[T]) enabled(source embedded.Vertex, event Event) *transition {
+func (sm *HSM[T]) enabled(source embedded.Vertex, event Event) *transition {
 	if sm == nil {
 		return nil
 	}
@@ -1171,7 +1171,7 @@ func (sm *statemachine[T]) enabled(source embedded.Vertex, event Event) *transit
 	return nil
 }
 
-func (sm *statemachine[T]) process(event embedded.Event) {
+func (sm *HSM[T]) process(event embedded.Event) {
 	if sm.processing.Load() {
 		return
 	}
@@ -1195,7 +1195,7 @@ func (sm *statemachine[T]) process(event embedded.Event) {
 	}
 }
 
-func (sm *statemachine[T]) dispatch(event Event) {
+func (sm *HSM[T]) Dispatch(event Event) {
 	if sm == nil {
 		return
 	}
@@ -1212,30 +1212,30 @@ func (sm *statemachine[T]) dispatch(event Event) {
 	sm.process(event)
 }
 
-// func (sm *statemachine[T]) DispatchAll(event Event) {
-// 	active, ok := sm.Value(Keys.All).(*sync.Map)
-// 	if !ok {
-// 		return
-// 	}
-// 	var end func(...any)
-// 	if sm.trace != nil {
-// 		end = sm.trace(sm, "DispatchAll", event)
-// 	}
-// 	go func(active *sync.Map, end func(...any)) {
-// 		if end != nil {
-// 			defer end()
-// 		}
-// 		active.Range(func(value any, _ any) bool {
-// 			sm, ok := value.(embedded.Context)
-// 			if !ok {
-// 				return true
-// 			}
-// 			sm.Dispatch(event)
-// 			return true
-// 		})
-// 	}(active, end)
+func (sm *HSM[T]) DispatchAll(event Event) {
+	active, ok := sm.Value(Keys.All).(*sync.Map)
+	if !ok {
+		return
+	}
+	var end func(...any)
+	if sm.trace != nil {
+		end = sm.trace(sm, "DispatchAll", event)
+	}
+	go func(active *sync.Map, end func(...any)) {
+		if end != nil {
+			defer end()
+		}
+		active.Range(func(value any, _ any) bool {
+			sm, ok := value.(embedded.Context)
+			if !ok {
+				return true
+			}
+			sm.Dispatch(event)
+			return true
+		})
+	}(active, end)
 
-// }
+}
 
 type hsm interface {
 	dispatch(event Event)
@@ -1249,17 +1249,17 @@ func FromContext[T context.Context](ctx T) (hsm, bool) {
 	return hsm, true
 }
 
-func DispatchAll(ctx context.Context, event Event) {
-	active, ok := ctx.Value(Keys.All).(*sync.Map)
-	if !ok {
-		return
-	}
-	active.Range(func(value any, _ any) bool {
-		sm, ok := value.(hsm)
-		if !ok {
-			return true
-		}
-		sm.dispatch(event)
-		return true
-	})
-}
+// func DispatchAll(ctx context.Context, event Event) {
+// 	active, ok := ctx.Value(Keys.All).(*sync.Map)
+// 	if !ok {
+// 		return
+// 	}
+// 	active.Range(func(value any, _ any) bool {
+// 		sm, ok := value.(hsm)
+// 		if !ok {
+// 			return true
+// 		}
+// 		sm.dispatch(event)
+// 		return true
+// 	})
+// }
