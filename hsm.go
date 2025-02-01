@@ -797,8 +797,9 @@ func Final(name string) RedifinableElement {
 }
 
 type subcontext = context.Context
+type HSM = embedded.HSM
 
-type HSM[T context.Context] struct {
+type hsm[T context.Context] struct {
 	subcontext
 	behavior[T]
 	state      embedded.Element
@@ -812,22 +813,27 @@ type HSM[T context.Context] struct {
 
 type Context[T context.Context] struct {
 	subcontext
-	*HSM[T]
+	HSM     *hsm[T]
 	cancel  context.CancelFunc
 	channel chan struct{}
+	Storage T
 }
 
 func (ctx Context[T]) Dispatch(event Event) {
-	if ctx.processing.Load() {
-		ctx.queue.Push(event)
+	if ctx.HSM.processing.Load() {
+		ctx.HSM.queue.Push(event)
 	} else {
 		go ctx.HSM.Dispatch(event)
 	}
 }
 
-type Trace func(ctx context.Context, step string, elements ...embedded.Element) func(...any)
+func (ctx Context[T]) DispatchAll(event Event) {
+	ctx.HSM.DispatchAll(event)
+}
 
-func WithTrace[T context.Context](hsm *HSM[T], trace Trace) *HSM[T] {
+type Trace func(hsm HSM, step string, elements ...Element) func(...any)
+
+func WithTrace[T context.Context](hsm *hsm[T], trace Trace) HSM {
 	hsm.trace = trace
 	return hsm
 }
@@ -836,8 +842,8 @@ type key struct{}
 
 var allKey = key{}
 
-func New[T context.Context](ctx T, model *Model) *HSM[T] {
-	hsm := &HSM[T]{
+func New[T context.Context](ctx T, model *Model) HSM {
+	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
 				kind:          kind.StateMachine,
@@ -864,7 +870,7 @@ func New[T context.Context](ctx T, model *Model) *HSM[T] {
 	return hsm
 }
 
-func (hsm *HSM[T]) State() string {
+func (hsm *hsm[T]) State() string {
 	if hsm == nil {
 		return ""
 	}
@@ -874,7 +880,7 @@ func (hsm *HSM[T]) State() string {
 	return hsm.state.QualifiedName()
 }
 
-func (hsm *HSM[T]) Terminate() {
+func (hsm *hsm[T]) Terminate() {
 	if hsm == nil {
 		return
 	}
@@ -896,7 +902,7 @@ func (hsm *HSM[T]) Terminate() {
 	all.Delete(hsm)
 }
 
-func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
+func (hsm *hsm[T]) activate(element embedded.Element) *Context[T] {
 	current, ok := hsm.active[element.QualifiedName()]
 	if !ok {
 		current = &Context[T]{
@@ -908,7 +914,7 @@ func (hsm *HSM[T]) activate(element embedded.Element) *Context[T] {
 	return current
 }
 
-func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry bool) embedded.Element {
+func (hsm *hsm[T]) enter(element embedded.Element, event Event, defaultEntry bool) Element {
 	if hsm == nil {
 		return nil
 	}
@@ -974,7 +980,7 @@ func (hsm *HSM[T]) enter(element embedded.Element, event Event, defaultEntry boo
 	return nil
 }
 
-func (hsm *HSM[T]) initial(element embedded.Element, event Event) embedded.Element {
+func (hsm *hsm[T]) initial(element Element, event Event) Element {
 	if hsm == nil || element == nil {
 		return nil
 	}
@@ -997,7 +1003,7 @@ func (hsm *HSM[T]) initial(element embedded.Element, event Event) embedded.Eleme
 	return element
 }
 
-func (hsm *HSM[T]) exit(element embedded.Element, event Event) {
+func (hsm *hsm[T]) exit(element Element, event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
@@ -1028,7 +1034,7 @@ func (hsm *HSM[T]) exit(element embedded.Element, event Event) {
 
 }
 
-func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
+func (hsm *hsm[T]) execute(element *behavior[T], event Event) {
 	if hsm == nil || element == nil {
 		return
 	}
@@ -1046,7 +1052,7 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 			element.action(Context[T]{
 				subcontext: ctx,
 				HSM:        hsm,
-				cancel:     ctx.cancel,
+				Storage:    ctx.Storage,
 			}, event)
 			ctx.channel <- struct{}{}
 		}(ctx, end)
@@ -1057,13 +1063,14 @@ func (hsm *HSM[T]) execute(element *behavior[T], event Event) {
 		element.action(Context[T]{
 			subcontext: hsm.subcontext,
 			HSM:        hsm,
+			Storage:    hsm.Storage,
 		}, event)
 
 	}
 
 }
 
-func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
+func (hsm *hsm[T]) evaluate(guard *constraint[T], event Event) bool {
 	if hsm == nil || guard == nil || guard.expression == nil {
 		return true
 	}
@@ -1074,12 +1081,13 @@ func (hsm *HSM[T]) evaluate(guard *constraint[T], event Event) bool {
 		Context[T]{
 			subcontext: hsm.subcontext,
 			HSM:        hsm,
+			Storage:    hsm.Storage,
 		},
 		event,
 	)
 }
 
-func (hsm *HSM[T]) transition(current embedded.Element, transition *transition, event Event) embedded.Element {
+func (hsm *hsm[T]) transition(current Element, transition *transition, event Event) Element {
 	if hsm == nil {
 		return nil
 	}
@@ -1121,7 +1129,7 @@ func (hsm *HSM[T]) transition(current embedded.Element, transition *transition, 
 	return current
 }
 
-func (hsm *HSM[T]) terminate(behavior *behavior[T]) {
+func (hsm *hsm[T]) terminate(behavior *behavior[T]) {
 	if hsm == nil || behavior == nil {
 		return
 	}
@@ -1137,7 +1145,7 @@ func (hsm *HSM[T]) terminate(behavior *behavior[T]) {
 
 }
 
-func (hsm *HSM[T]) enabled(source embedded.Vertex, event Event) *transition {
+func (hsm *hsm[T]) enabled(source embedded.Vertex, event Event) *transition {
 	if hsm == nil {
 		return nil
 	}
@@ -1161,7 +1169,7 @@ func (hsm *HSM[T]) enabled(source embedded.Vertex, event Event) *transition {
 	return nil
 }
 
-func (hsm *HSM[T]) process(event embedded.Event) {
+func (hsm *hsm[T]) process(event embedded.Event) {
 	if hsm.processing.Load() {
 		return
 	}
@@ -1185,7 +1193,7 @@ func (hsm *HSM[T]) process(event embedded.Event) {
 	}
 }
 
-func (hsm *HSM[T]) Dispatch(event Event) {
+func (hsm *hsm[T]) Dispatch(event Event) {
 	if hsm == nil {
 		return
 	}
@@ -1202,7 +1210,7 @@ func (hsm *HSM[T]) Dispatch(event Event) {
 	hsm.process(event)
 }
 
-func (hsm *HSM[T]) DispatchAll(event Event) {
+func (hsm *hsm[T]) DispatchAll(event Event) {
 	active, ok := hsm.Value(allKey).(*sync.Map)
 	if !ok {
 		return
@@ -1216,7 +1224,7 @@ func (hsm *HSM[T]) DispatchAll(event Event) {
 			defer end()
 		}
 		active.Range(func(value any, _ any) bool {
-			sm, ok := value.(embedded.Context)
+			sm, ok := value.(HSM)
 			if !ok {
 				return true
 			}

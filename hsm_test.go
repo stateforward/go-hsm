@@ -51,7 +51,7 @@ type storage struct {
 }
 
 type THSM struct {
-	*hsm.HSM[*storage]
+	hsm.HSM
 }
 
 func TestHSM(t *testing.T) {

@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stateforward/go-hsm"
@@ -9,8 +8,8 @@ import (
 
 type Test struct {
 	name string
-	fn   func(t *testing.T, sm *hsm.HSM[context.Context])
+	fn   func(t *testing.T, sm hsm.HSM)
 }
 
-func Run[T context.Context](t *testing.T, sm *hsm.HSM[T], maybeEvents ...map[string]hsm.Event) {
+func Run(t *testing.T, sm hsm.HSM, maybeEvents ...map[string]hsm.Event) {
 }
