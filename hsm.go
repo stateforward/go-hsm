@@ -845,11 +845,10 @@ func New[T context.Context](ctx T, model *Model) Active[T] {
 		all = &sync.Map{}
 	}
 	active := Active[T]{
-		HSM:        hsm,
-		subcontext: context.WithValue(ctx, Keys.All, all),
+		HSM: hsm,
 	}
 	all.Store(hsm, &active)
-
+	active.subcontext = context.WithValue(ctx, Keys.All, all)
 	hsm.method = func(_ Active[T], event Event) {
 		active.processing.Store(true)
 		defer active.processing.Store(false)
