@@ -830,6 +830,8 @@ var Keys = struct {
 	All: key[*sync.Map]{},
 }
 
+func noop() {}
+
 func New[T context.Context](ctx T, model *Model, options ...Option[T]) Active[T] {
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
@@ -936,6 +938,7 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 								Active[T]{
 									subcontext: ctx,
 									HSM:        active.HSM,
+									cancel:     noop,
 								},
 							)
 							timer := time.NewTimer(duration)
@@ -1046,6 +1049,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 			element.method(Active[T]{
 				subcontext: ctx,
 				HSM:        active.HSM,
+				cancel:     ctx.cancel,
 			}, event)
 			ctx.channel <- struct{}{}
 		}(ctx, end)
@@ -1056,6 +1060,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 		element.method(Active[T]{
 			subcontext: active,
 			HSM:        active.HSM,
+			cancel:     noop,
 		}, event)
 
 	}
@@ -1073,6 +1078,7 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 		Active[T]{
 			subcontext: active,
 			HSM:        active.HSM,
+			cancel:     noop,
 		},
 		event,
 	)

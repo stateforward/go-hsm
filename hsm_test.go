@@ -322,6 +322,7 @@ func TestHSM(t *testing.T) {
 	}
 	trace.reset()
 	sm.Dispatch(hsm.NewEvent("J"))
+	time.Sleep(time.Millisecond)
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
