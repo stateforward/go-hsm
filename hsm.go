@@ -881,7 +881,7 @@ func (active *Active[T]) Terminate() {
 		return
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "Terminate", active.state)
+		ctx, end := active.trace(active, "Terminate", active.state)
 		active = &Active[T]{
 			subcontext: ctx,
 			HSM:        active.HSM,
@@ -921,7 +921,7 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 		return nil
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "enter", element)
+		ctx, end := active.trace(active, "enter", element)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -994,7 +994,7 @@ func (active *Active[T]) initial(element embedded.Element, event Event) embedded
 		return nil
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "initial", element)
+		ctx, end := active.trace(active, "initial", element)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1023,7 +1023,7 @@ func (active *Active[T]) exit(element embedded.Element, event Event) {
 		return
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "exit", element)
+		ctx, end := active.trace(active, "exit", element)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1061,7 +1061,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 	}
 	var end func(...any)
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "execute", element)
+		ctx, end := active.trace(active, "execute", element)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1099,7 +1099,7 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 		return true
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "evaluate", guard)
+		ctx, end := active.trace(active, "evaluate", guard)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1122,7 +1122,7 @@ func (active *Active[T]) transition(current embedded.Element, transition *transi
 		return nil
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "transition", transition)
+		ctx, end := active.trace(active, "transition", transition)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1170,7 +1170,7 @@ func (active *Active[T]) terminate(behavior *behavior[T]) {
 		return
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "terminate", behavior)
+		ctx, end := active.trace(active, "terminate", behavior)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1240,7 +1240,7 @@ func (active *Active[T]) dispatch(event Event) {
 		return
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active.Context, "Dispatch", event)
+		ctx, end := active.trace(active, "Dispatch", event)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
