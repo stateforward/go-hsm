@@ -41,9 +41,10 @@ type State interface {
 }
 
 type Event interface {
-	Element
+	Kind() uint64
 	Name() string
 	Data() any
+	Id() string
 }
 
 type Constraint interface {

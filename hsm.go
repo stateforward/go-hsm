@@ -25,7 +25,6 @@ type element struct {
 	kind          uint64
 	qualifiedName string
 	id            string
-	metadata      map[string]any
 }
 
 func (element *element) Kind() uint64 {
@@ -61,13 +60,6 @@ func (element *element) QualifiedName() string {
 		return ""
 	}
 	return element.qualifiedName
-}
-
-func (element *element) Metadata() map[string]any {
-	if element == nil {
-		return nil
-	}
-	return element.metadata
 }
 
 /******* Model *******/
@@ -135,7 +127,7 @@ type transition struct {
 	target string
 	guard  string
 	effect string
-	events []embedded.Event
+	events []Event
 	paths  map[string]paths
 }
 
@@ -147,7 +139,7 @@ func (transition *transition) Effect() string {
 	return transition.effect
 }
 
-func (transition *transition) Events() []embedded.Event {
+func (transition *transition) Events() []Event {
 	return transition.events
 }
 
@@ -182,38 +174,56 @@ type event struct {
 	data any
 }
 
-func (event *event) MarshalJSON() ([]byte, error) {
+func (evt *event) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any{
-		"kind": event.kind,
-		"name": event.qualifiedName,
-		"id":   event.id,
-		"data": event.data,
+		"kind": evt.kind,
+		"name": evt.qualifiedName,
+		"id":   evt.id,
+		"data": evt.data,
 	})
 }
 
-func (event *event) UnmarshalJSON(data []byte) error {
+func (evt *event) UnmarshalJSON(data []byte) error {
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		return err
 	}
 	if kind, ok := m["kind"].(uint64); ok {
-		event.kind = kind
+		evt.kind = kind
 	}
 	if name, ok := m["name"].(string); ok {
-		event.qualifiedName = name
+		evt.qualifiedName = name
 	}
 	if id, ok := m["id"].(string); ok {
-		event.id = id
+		evt.id = id
 	}
-	event.data = m["data"]
+	evt.data = m["data"]
 	return nil
 }
 
-func (event *event) Name() string {
-	if event == nil {
+func (evt *event) Name() string {
+	if evt == nil {
 		return ""
 	}
-	return event.qualifiedName
+	return evt.qualifiedName
+}
+
+func (evt *event) Clone(data any, maybeId ...string) *event {
+	if evt == nil {
+		return nil
+	}
+	var id string
+	if len(maybeId) > 0 {
+		id = maybeId[0]
+	}
+	return &event{
+		element: element{
+			kind:          evt.kind,
+			qualifiedName: evt.qualifiedName,
+			id:            id,
+		},
+		data: data,
+	}
 }
 
 func (event *event) Data() any {
@@ -364,7 +374,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 			name = fmt.Sprintf("transition_%d", len(model.namespace))
 		}
 		transition := &transition{
-			events: []embedded.Event{},
+			events: []Event{},
 			element: element{
 				kind:          kind.Transition,
 				qualifiedName: path.Join(owner.QualifiedName(), name),
@@ -761,21 +771,20 @@ func After[T context.Context](expr func(hsm Active[T]) time.Duration, maybeName 
 	}
 }
 
-var pool = sync.Pool{
-	New: func() any {
-		return &event{}
-	},
-}
+// var pool = sync.Pool{
+// 	New: func() any {
+// 		return &event{}
+// 	},
+// }
 
-func NewEvent(name string, maybeData ...any) *event {
-	var data any
-	if len(maybeData) > 0 {
-		data = maybeData[0]
+func NewEvent(name string, data any, maybeId ...string) *event {
+	event := &event{
+		element: element{kind: kind.Event, qualifiedName: name},
+		data:    data,
 	}
-	// event := pool.Get().(*event)
-	event := &event{}
-	event.element = element{kind: kind.Event, qualifiedName: name}
-	event.data = data
+	if len(maybeId) > 0 {
+		event.id = maybeId[0]
+	}
 	return event
 }
 
@@ -813,9 +822,9 @@ func (active *Active[T]) Dispatch(event Event) {
 	}
 }
 
-type Trace func(ctx context.Context, step string, elements ...embedded.Element) (context.Context, func(...any))
+type Trace func(ctx context.Context, step string, data ...any) (context.Context, func(...any))
 
-func UseTrace[T context.Context](trace Trace) Option[T] {
+func WithTrace[T context.Context](trace Trace) Option[T] {
 	return func(hsm *HSM[T]) {
 		hsm.trace = trace
 	}
@@ -905,13 +914,13 @@ func (active *Active[T]) Terminate() {
 	all.Delete(active.HSM)
 }
 
-func (active *Active[T]) activate(element embedded.Element) *Active[T] {
-	current, ok := active.active[element.QualifiedName()]
+func (active *Active[T]) activate(id string) *Active[T] {
+	current, ok := active.active[id]
 	if !ok {
 		current = &Active[T]{
 			channel: make(chan struct{}, 1),
 		}
-		active.active[element.QualifiedName()] = current
+		active.active[id] = current
 	}
 	current.subcontext, current.cancel = context.WithCancel(active)
 	return current
@@ -945,8 +954,8 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 				for _, event := range element.Events() {
 					switch event.Kind() {
 					case kind.TimeEvent:
-						ctx := active.activate(event)
-						go func(ctx *Active[T], event embedded.Event) {
+						ctx := active.activate(event.Id())
+						go func(ctx *Active[T], event Event) {
 							duration := event.Data().(func(hsm Active[T]) time.Duration)(
 								Active[T]{
 									subcontext: ctx,
@@ -1038,7 +1047,7 @@ func (active *Active[T]) exit(element embedded.Element, event Event) {
 				for _, event := range element.Events() {
 					switch event.Kind() {
 					case kind.TimeEvent:
-						active, ok := active.active[event.QualifiedName()]
+						active, ok := active.active[event.Id()]
 						if ok {
 							active.cancel()
 						}
@@ -1072,7 +1081,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 	}
 	switch element.Kind() {
 	case kind.Concurrent:
-		ctx := active.activate(element)
+		ctx := active.activate(element.QualifiedName())
 		go func(ctx *Active[T], end func(...any)) {
 			if end != nil {
 				defer end()
@@ -1212,7 +1221,7 @@ func (active *Active[T]) enabled(source embedded.Vertex, event Event) *transitio
 	return nil
 }
 
-func (active *Active[T]) process(event embedded.Event) {
+func (active *Active[T]) process(event Event) {
 	if active.processing.Load() {
 		return
 	}
