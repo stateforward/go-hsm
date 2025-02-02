@@ -898,7 +898,7 @@ func (active *Active[T]) activate(element embedded.Element) *Active[T] {
 		}
 		active.active[element.QualifiedName()] = current
 	}
-	current.subcontext, current.cancel = context.WithCancel(active.Context)
+	current.subcontext, current.cancel = context.WithCancel(active)
 	return current
 }
 
