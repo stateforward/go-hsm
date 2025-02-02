@@ -281,7 +281,6 @@ func State(name string, partialElements ...RedifinableElement) RedifinableElemen
 	return func(graph *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kind.StateMachine, kind.State)
 		if owner == nil {
-			slog.Error("state must be called within a StateMachine or State")
 			panic(fmt.Errorf("state must be called within a StateMachine or State"))
 		}
 		element := &state{
@@ -444,12 +443,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 				return transition
 			})
 		}
-		transition.metadata = map[string]any{
-			"source": transition.source,
-			"target": transition.target,
-			"guard":  transition.guard,
-			"effect": transition.effect,
-		}
+
 		return transition
 	}
 }
@@ -850,11 +844,11 @@ func New[T context.Context](ctx T, model *Model) Active[T] {
 	if !ok {
 		all = &sync.Map{}
 	}
-	all.Store(hsm, struct{}{})
 	active := Active[T]{
 		HSM:        hsm,
 		subcontext: context.WithValue(ctx, Keys.All, all),
 	}
+	all.Store(hsm, &active)
 
 	hsm.method = func(_ Active[T], event Event) {
 		active.processing.Store(true)
@@ -1211,12 +1205,12 @@ func (sm *Active[T]) DispatchAll(event Event) {
 	if sm.trace != nil {
 		end = sm.trace(sm, "DispatchAll", event)
 	}
-	go func(active *sync.Map, end func(...any)) {
+	go func(all *sync.Map, end func(...any)) {
 		if end != nil {
 			defer end()
 		}
-		active.Range(func(value any, _ any) bool {
-			sm, ok := value.(embedded.Context)
+		all.Range(func(_ any, active any) bool {
+			sm, ok := active.(interface{ Dispatch(Event) })
 			if !ok {
 				return true
 			}
