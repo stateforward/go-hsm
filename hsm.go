@@ -1048,7 +1048,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 			defer end()
 		}
 		element.method(Active[T]{
-			subcontext: active.Context,
+			subcontext: active,
 			HSM:        active.HSM,
 		}, event)
 
