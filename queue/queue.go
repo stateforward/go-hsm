@@ -24,6 +24,9 @@ func (q *Queue) Pop() embedded.Event {
 	event := events[0]
 	events = events[1:]
 	q.events.Store(&events)
+	if q.partition > 0 {
+		q.partition--
+	}
 	return event
 }
 

@@ -421,27 +421,25 @@ func TestLCA(t *testing.T) {
 // }
 var benchModel = hsm.Define(
 	"TestHSM",
-	hsm.State("foo",
-		hsm.Entry(noBehavior),
-		hsm.Exit(noBehavior),
-	),
-	hsm.State("bar",
-		hsm.Entry(noBehavior),
-		hsm.Exit(noBehavior),
-	),
+	hsm.State("foo"), // hsm.Entry(noBehavior),
+	// hsm.Exit(noBehavior),
+
+	hsm.State("bar"), // hsm.Entry(noBehavior),
+	// hsm.Exit(noBehavior),
+
 	hsm.Transition(
 		hsm.Trigger("foo"),
 		hsm.Source("foo"),
 		hsm.Target("bar"),
-		hsm.Effect(noBehavior),
+		// hsm.Effect(noBehavior),
 	),
 	hsm.Transition(
 		hsm.Trigger("bar"),
 		hsm.Source("bar"),
 		hsm.Target("foo"),
-		hsm.Effect(noBehavior),
+		// hsm.Effect(noBehavior),
 	),
-	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
+	hsm.Initial(hsm.Target("foo")), //, hsm.Effect(noBehavior)),
 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
 var benchSM = hsm.New(context.Background(), &benchModel)

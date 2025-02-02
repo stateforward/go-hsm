@@ -812,7 +812,7 @@ func (active *Active[T]) Dispatch(event Event) {
 	}
 }
 
-type Trace func(ctx context.Context, step string, elements ...embedded.Element) func(...any)
+type Trace func(ctx context.Context, step string, elements ...embedded.Element) (context.Context, func(...any))
 
 func UseTrace[T context.Context](trace Trace) Option[T] {
 	return func(hsm *HSM[T]) {
@@ -881,7 +881,13 @@ func (active *Active[T]) Terminate() {
 		return
 	}
 	if active.trace != nil {
-		defer active.trace(active.Context, "Terminate", active.state)()
+		ctx, end := active.trace(active.Context, "Terminate", active.state)
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
+		defer end()
 	}
 	var ok bool
 	for active.state != nil {
@@ -891,11 +897,11 @@ func (active *Active[T]) Terminate() {
 			break
 		}
 	}
-	// all, ok := sm.Value(Keys.All).(*sync.Map)
-	// if !ok {
-	// 	return
-	// }
-	// all.Delete(sm)
+	all, ok := active.Value(Keys.All).(*sync.Map)
+	if !ok {
+		return
+	}
+	all.Delete(active.HSM)
 }
 
 func (active *Active[T]) activate(element embedded.Element) *Active[T] {
@@ -915,7 +921,13 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 		return nil
 	}
 	if active.trace != nil {
-		defer active.trace(active, "enter", element)()
+		ctx, end := active.trace(active.Context, "enter", element)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	switch element.Kind() {
 	case kind.State:
@@ -982,7 +994,13 @@ func (active *Active[T]) initial(element embedded.Element, event Event) embedded
 		return nil
 	}
 	if active.trace != nil {
-		defer active.trace(active, "initial", element)()
+		ctx, end := active.trace(active.Context, "initial", element)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	var qualifiedName string
 	if element.QualifiedName() == "/" {
@@ -1005,7 +1023,13 @@ func (active *Active[T]) exit(element embedded.Element, event Event) {
 		return
 	}
 	if active.trace != nil {
-		defer active.trace(active.Context, "exit", element)()
+		ctx, end := active.trace(active.Context, "exit", element)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	if state, ok := element.(*state); ok {
 		for _, qualifiedName := range state.transitions {
@@ -1037,7 +1061,13 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 	}
 	var end func(...any)
 	if active.trace != nil {
-		end = active.trace(active, "execute", element)
+		ctx, end := active.trace(active.Context, "execute", element)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	switch element.Kind() {
 	case kind.Concurrent:
@@ -1054,9 +1084,6 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 			ctx.channel <- struct{}{}
 		}(ctx, end)
 	default:
-		if end != nil {
-			defer end()
-		}
 		element.method(Active[T]{
 			subcontext: active,
 			HSM:        active.HSM,
@@ -1072,7 +1099,13 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 		return true
 	}
 	if active.trace != nil {
-		defer active.trace(active, "evaluate", guard)()
+		ctx, end := active.trace(active.Context, "evaluate", guard)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	return guard.expression(
 		Active[T]{
@@ -1089,7 +1122,13 @@ func (active *Active[T]) transition(current embedded.Element, transition *transi
 		return nil
 	}
 	if active.trace != nil {
-		defer active.trace(active, "transition", transition)()
+		ctx, end := active.trace(active.Context, "transition", transition)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	path, ok := transition.paths[current.QualifiedName()]
 	if !ok {
@@ -1131,7 +1170,13 @@ func (active *Active[T]) terminate(behavior *behavior[T]) {
 		return
 	}
 	if active.trace != nil {
-		defer active.trace(active, "terminate", behavior)()
+		ctx, end := active.trace(active.Context, "terminate", behavior)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	active, ok := active.active[behavior.QualifiedName()]
 	if !ok {
@@ -1195,7 +1240,13 @@ func (active *Active[T]) dispatch(event Event) {
 		return
 	}
 	if active.trace != nil {
-		defer active.trace(active.Context, "Dispatch", event)()
+		ctx, end := active.trace(active.Context, "Dispatch", event)
+		defer end()
+		active = &Active[T]{
+			subcontext: ctx,
+			HSM:        active.HSM,
+			cancel:     active.cancel,
+		}
 	}
 	if active.state == nil {
 		return
@@ -1207,27 +1258,17 @@ func (active *Active[T]) dispatch(event Event) {
 	active.process(event)
 }
 
-func (sm *Active[T]) DispatchAll(event Event) {
-	maybeAll, ok := sm.Value(Keys.All).(*sync.Map)
+func (active *Active[T]) DispatchAll(event Event) {
+	all, ok := active.Value(Keys.All).(*sync.Map)
 	if !ok {
 		return
 	}
-	var end func(...any)
-	if sm.trace != nil {
-		end = sm.trace(sm, "DispatchAll", event)
-	}
-	go func(all *sync.Map, end func(...any)) {
-		if end != nil {
-			defer end()
-		}
-		all.Range(func(_ any, active any) bool {
-			sm, ok := active.(interface{ Dispatch(Event) })
-			if !ok {
-				return true
-			}
-			sm.Dispatch(event)
+	all.Range(func(_ any, value any) bool {
+		maybeActive, ok := value.(interface{ Dispatch(Event) })
+		if !ok {
 			return true
-		})
-	}(maybeAll, end)
-
+		}
+		maybeActive.Dispatch(event)
+		return true
+	})
 }
