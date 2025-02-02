@@ -814,10 +814,13 @@ func (active *Active[T]) Dispatch(event Event) {
 
 type Trace func(ctx context.Context, step string, elements ...embedded.Element) func(...any)
 
-func WithTrace[T context.Context](hsm Active[T], trace Trace) Active[T] {
-	hsm.trace = trace
-	return hsm
+func UseTrace[T context.Context](trace Trace) Option[T] {
+	return func(hsm *HSM[T]) {
+		hsm.trace = trace
+	}
 }
+
+type Option[T context.Context] func(hsm *HSM[T])
 
 type key[T any] struct{}
 
@@ -827,7 +830,7 @@ var Keys = struct {
 	All: key[*sync.Map]{},
 }
 
-func New[T context.Context](ctx T, model *Model) Active[T] {
+func New[T context.Context](ctx T, model *Model, options ...Option[T]) Active[T] {
 	hsm := &HSM[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -840,15 +843,18 @@ func New[T context.Context](ctx T, model *Model) Active[T] {
 		Context: ctx,
 		queue:   queue.New(),
 	}
+	for _, option := range options {
+		option(hsm)
+	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
 		all = &sync.Map{}
 	}
 	active := Active[T]{
-		HSM: hsm,
+		HSM:        hsm,
+		subcontext: context.WithValue(ctx, Keys.All, all),
 	}
 	all.Store(hsm, &active)
-	active.subcontext = context.WithValue(ctx, Keys.All, all)
 	hsm.method = func(_ Active[T], event Event) {
 		active.processing.Store(true)
 		defer active.processing.Store(false)
