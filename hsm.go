@@ -772,7 +772,8 @@ func NewEvent(name string, maybeData ...any) *event {
 	if len(maybeData) > 0 {
 		data = maybeData[0]
 	}
-	event := pool.Get().(*event)
+	// event := pool.Get().(*event)
+	event := &event{}
 	event.element = element{kind: kind.Event, qualifiedName: name}
 	event.data = data
 	return event
@@ -1230,7 +1231,7 @@ func (active *Active[T]) process(event embedded.Event) {
 			}
 			state = source.Owner()
 		}
-		pool.Put(event)
+		// pool.Put(event)
 		event = active.queue.Pop()
 	}
 }
