@@ -57,14 +57,11 @@ type Behavior interface {
 	Action() any
 }
 
-type StateMachine interface {
+type Active interface {
+	context.Context
 	Element
 	State() string
 	Terminate()
-}
-
-type Context interface {
-	context.Context
 	Dispatch(event Event)
 	DispatchAll(event Event)
 }

@@ -1071,7 +1071,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 	}
 	var end func(...any)
 	if active.trace != nil {
-		ctx, end := active.trace(active, "execute", element)
+		ctx, end := active.trace(active, "execute", element, event)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1109,7 +1109,7 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 		return true
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active, "evaluate", guard)
+		ctx, end := active.trace(active, "evaluate", guard, event)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
@@ -1132,7 +1132,7 @@ func (active *Active[T]) transition(current embedded.Element, transition *transi
 		return nil
 	}
 	if active.trace != nil {
-		ctx, end := active.trace(active, "transition", transition)
+		ctx, end := active.trace(active, "transition", current, transition, event)
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
