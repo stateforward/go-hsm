@@ -208,7 +208,7 @@ func (evt *event) Name() string {
 	return evt.qualifiedName
 }
 
-func (evt *event) Clone(data any, maybeId ...string) *event {
+func (evt *event) Clone(data any, maybeId ...string) Event {
 	if evt == nil {
 		return nil
 	}

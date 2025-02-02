@@ -45,6 +45,7 @@ type Event interface {
 	Name() string
 	Data() any
 	Id() string
+	Clone(data any, maybeId ...string) Event
 }
 
 type Constraint interface {
