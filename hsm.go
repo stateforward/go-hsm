@@ -794,9 +794,18 @@ func Final(name string) RedifinableElement {
 	}
 }
 
+type HSM interface {
+	context.Context
+	Element
+	State() string
+	Terminate()
+	Dispatch(event Event)
+	DispatchAll(event Event)
+}
+
 type subcontext = context.Context
 
-type HSM[T context.Context] struct {
+type hsm[T context.Context] struct {
 	behavior[T]
 	state      embedded.Element
 	model      *Model
@@ -809,7 +818,7 @@ type HSM[T context.Context] struct {
 
 type Active[T context.Context] struct {
 	subcontext
-	*HSM[T]
+	*hsm[T]
 	cancel  context.CancelFunc
 	channel chan struct{}
 }
@@ -822,15 +831,15 @@ func (active *Active[T]) Dispatch(event Event) {
 	}
 }
 
-type Trace func(ctx context.Context, step string, data ...any) (context.Context, func(...any))
+type Trace func(hsm HSM, step string, data ...any) (context.Context, func(...any))
 
 func WithTrace[T context.Context](trace Trace) Option[T] {
-	return func(hsm *HSM[T]) {
+	return func(hsm *hsm[T]) {
 		hsm.trace = trace
 	}
 }
 
-type Option[T context.Context] func(hsm *HSM[T])
+type Option[T context.Context] func(hsm *hsm[T])
 
 type key[T any] struct{}
 
@@ -843,7 +852,7 @@ var Keys = struct {
 func noop() {}
 
 func New[T context.Context](ctx T, model *Model, options ...Option[T]) Active[T] {
-	hsm := &HSM[T]{
+	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
 				kind:          kind.StateMachine,
@@ -863,7 +872,7 @@ func New[T context.Context](ctx T, model *Model, options ...Option[T]) Active[T]
 		all = &sync.Map{}
 	}
 	active := Active[T]{
-		HSM:        hsm,
+		hsm:        hsm,
 		subcontext: context.WithValue(ctx, Keys.All, all),
 	}
 	all.Store(hsm, &active)
@@ -894,7 +903,7 @@ func (active *Active[T]) Terminate() {
 		ctx, end := active.trace(active, "Terminate", active.state)
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 		defer end()
@@ -911,7 +920,7 @@ func (active *Active[T]) Terminate() {
 	if !ok {
 		return
 	}
-	all.Delete(active.HSM)
+	all.Delete(active.hsm)
 }
 
 func (active *Active[T]) activate(id string) *Active[T] {
@@ -935,7 +944,7 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -959,7 +968,7 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 							duration := event.Data().(func(hsm Active[T]) time.Duration)(
 								Active[T]{
 									subcontext: ctx,
-									HSM:        active.HSM,
+									hsm:        active.hsm,
 									cancel:     noop,
 								},
 							)
@@ -1008,7 +1017,7 @@ func (active *Active[T]) initial(element embedded.Element, event Event) embedded
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -1037,7 +1046,7 @@ func (active *Active[T]) exit(element embedded.Element, event Event) {
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -1075,7 +1084,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -1088,7 +1097,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 			}
 			element.method(Active[T]{
 				subcontext: ctx,
-				HSM:        active.HSM,
+				hsm:        active.hsm,
 				cancel:     ctx.cancel,
 			}, event)
 			ctx.channel <- struct{}{}
@@ -1096,7 +1105,7 @@ func (active *Active[T]) execute(element *behavior[T], event Event) {
 	default:
 		element.method(Active[T]{
 			subcontext: active,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     noop,
 		}, event)
 
@@ -1113,14 +1122,14 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
 	return guard.expression(
 		Active[T]{
 			subcontext: active,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     noop,
 		},
 		event,
@@ -1136,7 +1145,7 @@ func (active *Active[T]) transition(current embedded.Element, transition *transi
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -1184,7 +1193,7 @@ func (active *Active[T]) terminate(behavior *behavior[T]) {
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
@@ -1254,7 +1263,7 @@ func (active *Active[T]) dispatch(event Event) {
 		defer end()
 		active = &Active[T]{
 			subcontext: ctx,
-			HSM:        active.HSM,
+			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
 	}
