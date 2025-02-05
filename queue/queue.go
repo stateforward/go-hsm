@@ -1,29 +1,32 @@
 package queue
 
 import (
-	"sync/atomic"
+	"sync"
 
 	"github.com/stateforward/go-hsm/embedded"
 	"github.com/stateforward/go-hsm/kind"
 )
 
 type Queue struct {
-	events    atomic.Pointer[[]embedded.Event]
-	partition int
+	mutex     sync.RWMutex
+	events    []embedded.Event
+	partition uint64
 }
 
 func (q *Queue) Len() int {
-	return len(*q.events.Load())
+	q.mutex.RLock()
+	defer q.mutex.RUnlock()
+	return len(q.events)
 }
 
 func (q *Queue) Pop() embedded.Event {
-	events := *q.events.Load()
-	if len(events) == 0 {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	if len(q.events) == 0 {
 		return nil
 	}
-	event := events[0]
-	events = events[1:]
-	q.events.Store(&events)
+	event := q.events[0]
+	q.events = q.events[1:]
 	if q.partition > 0 {
 		q.partition--
 	}
@@ -31,14 +34,14 @@ func (q *Queue) Pop() embedded.Event {
 }
 
 func (q *Queue) Push(event embedded.Event) {
-	events := *q.events.Load()
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
 	if kind.IsKind(event.Kind(), kind.CompletionEvent) {
-		events = append(events[q.partition:], append([]embedded.Event{event}, events[:q.partition]...)...)
+		q.events = append(q.events[q.partition:], append([]embedded.Event{event}, q.events[:q.partition]...)...)
 		q.partition++
 	} else {
-		events = append(events, event)
+		q.events = append(q.events, event)
 	}
-	q.events.Store(&events)
 }
 
 func New(maybeSize ...int) *Queue {
@@ -47,6 +50,6 @@ func New(maybeSize ...int) *Queue {
 		events = make([]embedded.Event, maybeSize[0])
 	}
 	q := &Queue{}
-	q.events.Store(&events)
+	q.events = events
 	return q
 }

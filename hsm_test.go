@@ -362,7 +362,7 @@ func TestHSMDispatchAll(t *testing.T) {
 	if sm2.State() != "/foo" {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
-	sm2.DispatchAll(hsm.NewEvent("foo", nil))
+	hsm.DispatchAll(sm2, hsm.NewEvent("foo", nil))
 	time.Sleep(time.Second)
 	if sm1.State() != "/bar" {
 		t.Fatal("state is not correct", "state", sm1.State())
@@ -453,7 +453,7 @@ func BenchmarkHSM(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		benchSM.Dispatch(fooEvent)
+		hsm.Dispatch(benchSM, fooEvent)
 		if benchSM.State() != "/bar" {
 			b.Fatal("state is not correct", "state", benchSM.State())
 		}

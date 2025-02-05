@@ -379,17 +379,18 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 				kind:          kind.Transition,
 				qualifiedName: path.Join(owner.QualifiedName(), name),
 			},
-			paths: map[string]paths{},
+			source: ".",
+			paths:  map[string]paths{},
 		}
 		model.namespace[transition.QualifiedName()] = transition
 		stack = append(stack, transition)
 		apply(model, stack, partialElements...)
-		if transition.source == "" {
+		if transition.source == "." || transition.source == "" {
 			transition.source = owner.QualifiedName()
 		}
 		sourceElement, ok := model.namespace[transition.source]
 		if !ok {
-			panic(fmt.Errorf("missing source %s", transition.source))
+			panic(fmt.Errorf("missing source \"%s\" for transition \"%s\"", transition.source, transition.QualifiedName()))
 		}
 		switch source := sourceElement.(type) {
 		case *state:
@@ -400,10 +401,10 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 		if len(transition.events) == 0 && !kind.IsKind(sourceElement.Kind(), kind.Pseudostate) {
 
 			// TODO: completion transition
-			qualifiedName := path.Join(transition.source, ".completion")
-			transition.events = append(transition.events, &event{
-				element: element{kind: kind.CompletionEvent, qualifiedName: qualifiedName},
-			})
+			// qualifiedName := path.Join(transition.source, ".completion")
+			// transition.events = append(transition.events, &event{
+			// 	element: element{kind: kind.CompletionEvent, qualifiedName: qualifiedName},
+			// })
 			panic(fmt.Errorf("completion transition not implemented"))
 		}
 		if transition.target == transition.source {
@@ -464,6 +465,10 @@ func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 		if owner == nil {
 			panic(fmt.Errorf("source must be called within a Transition"))
 		}
+		transition := owner.(*transition)
+		if transition.source != "." && transition.source != "" {
+			panic(fmt.Errorf("transition \"%s\" already has a source \"%s\"", transition.QualifiedName(), transition.source))
+		}
 		var name string
 		switch any(nameOrPartialElement).(type) {
 		case string:
@@ -487,7 +492,7 @@ func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 			}
 			name = element.QualifiedName()
 		}
-		owner.(*transition).source = name
+		transition.source = name
 		return owner
 	}
 }
@@ -587,29 +592,29 @@ func Initial[T interface{ string | RedifinableElement }](elementOrName T, partia
 	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("initial must be called within a State"))
+			panic(fmt.Errorf("initial must be called within a State or Model"))
 		}
 		initial := &vertex{
 			element: element{kind: kind.Initial, qualifiedName: path.Join(owner.QualifiedName(), name)},
 		}
 		if model.namespace[initial.QualifiedName()] != nil {
-			panic(fmt.Errorf("initial %s state already exists for %s", initial.QualifiedName(), owner.QualifiedName()))
+			panic(fmt.Errorf("initial \"%s\" state already exists for \"%s\"", initial.QualifiedName(), owner.QualifiedName()))
 		}
 		model.namespace[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
 		transition := (Transition(Source(initial.QualifiedName()), partialElements...)(model, stack)).(*transition)
 		// validation logic
 		if transition.guard != "" {
-			panic(fmt.Errorf("initial %s cannot have a guard", initial.QualifiedName()))
+			panic(fmt.Errorf("initial \"%s\" cannot have a guard", initial.QualifiedName()))
 		}
 		if len(transition.events) > 0 {
-			panic(fmt.Errorf("initial %s cannot have triggers", initial.QualifiedName()))
+			panic(fmt.Errorf("initial \"%s\" cannot have triggers", initial.QualifiedName()))
 		}
 		if !strings.HasPrefix(transition.target, owner.QualifiedName()) {
-			panic(fmt.Errorf("initial %s must target a nested state not %s", initial.QualifiedName(), transition.target))
+			panic(fmt.Errorf("initial \"%s\" must target a nested state not \"%s\"", initial.QualifiedName(), transition.target))
 		}
 		if len(initial.transitions) > 1 {
-			panic(fmt.Errorf("initial %s cannot have multiple transitions %v", initial.QualifiedName(), initial.transitions))
+			panic(fmt.Errorf("initial \"%s\" cannot have multiple transitions %v", initial.QualifiedName(), initial.transitions))
 		}
 		return transition
 	}
@@ -626,18 +631,18 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 	return func(model *Model, stack []embedded.Element) embedded.Element {
 		owner := find(stack, kind.State, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("choice must be called within a State or Transition"))
+			panic(fmt.Errorf("you must call Choice() within a State or Transition"))
 		} else if kind.IsKind(owner.Kind(), kind.Transition) {
 			transition := owner.(*transition)
 			source := transition.source
 			owner = model.namespace[source]
 			if owner == nil {
-				panic(fmt.Errorf("you must specifiy a source when defining a choice within transition %s, with target %s", transition.QualifiedName(), transition.target))
+				panic(fmt.Errorf("transition \"%s\" targetting \"%s\" requires a source state when using Choice()", transition.QualifiedName(), transition.target))
 			} else if kind.IsKind(owner.Kind(), kind.Pseudostate) {
 				// pseudostates aren't a namespace, so we need to find the containing state
 				owner = find(stack, kind.State)
 				if owner == nil {
-					panic(fmt.Errorf("choice must be called within a State"))
+					panic(fmt.Errorf("you must call Choice() within a State"))
 				}
 			}
 		}
@@ -652,8 +657,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 		stack = append(stack, element)
 		apply(model, stack, partialElements...)
 		if len(element.transitions) == 0 {
-			slog.Error("choice must have at least one transition")
-			panic(fmt.Errorf("choice must have at least one transition"))
+			panic(fmt.Errorf("you must define at least one transition for choice \"%s\"", qualifiedName))
 		}
 		if defaultTransition := get[embedded.Transition](model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
 			if defaultTransition.Guard() != "" {
@@ -800,7 +804,6 @@ type HSM interface {
 	State() string
 	Terminate()
 	Dispatch(event Event)
-	DispatchAll(event Event)
 }
 
 type subcontext = context.Context
@@ -823,7 +826,7 @@ type Active[T context.Context] struct {
 	channel chan struct{}
 }
 
-func (active *Active[T]) Dispatch(event Event) {
+func (active Active[T]) Dispatch(event Event) {
 	if active.cancel != nil {
 		go active.dispatch(event)
 	} else {
@@ -839,14 +842,22 @@ func WithTrace[T context.Context](trace Trace) Option[T] {
 	}
 }
 
+func WithId[T context.Context](id string) Option[T] {
+	return func(hsm *hsm[T]) {
+		hsm.id = id
+	}
+}
+
 type Option[T context.Context] func(hsm *hsm[T])
 
 type key[T any] struct{}
 
 var Keys = struct {
 	All key[*sync.Map]
+	HSM key[HSM]
 }{
 	All: key[*sync.Map]{},
+	HSM: key[HSM]{},
 }
 
 func noop() {}
@@ -871,18 +882,18 @@ func New[T context.Context](ctx T, model *Model, options ...Option[T]) Active[T]
 	if !ok {
 		all = &sync.Map{}
 	}
-	active := Active[T]{
-		hsm:        hsm,
-		subcontext: context.WithValue(ctx, Keys.All, all),
+	active := &Active[T]{
+		hsm: hsm,
 	}
-	all.Store(hsm, &active)
+	active.subcontext = context.WithValue(context.WithValue(context.Background(), Keys.All, all), Keys.HSM, active)
+	all.Store(hsm, active)
 	hsm.method = func(_ Active[T], event Event) {
 		active.processing.Store(true)
 		defer active.processing.Store(false)
 		active.state = active.initial(&model.state, event)
 	}
 	active.execute(&hsm.behavior, nil)
-	return active
+	return *active
 }
 
 func (active *Active[T]) State() string {
@@ -1277,10 +1288,18 @@ func (active *Active[T]) dispatch(event Event) {
 	active.process(event)
 }
 
-func (active *Active[T]) DispatchAll(event Event) {
-	all, ok := active.Value(Keys.All).(*sync.Map)
+func Dispatch[T context.Context](ctx T, event Event) bool {
+	if hsm, ok := FromContext(ctx); ok {
+		hsm.Dispatch(event)
+		return true
+	}
+	return false
+}
+
+func DispatchAll(ctx context.Context, event Event) bool {
+	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
-		return
+		return false
 	}
 	all.Range(func(_ any, value any) bool {
 		maybeActive, ok := value.(interface{ Dispatch(Event) })
@@ -1290,4 +1309,18 @@ func (active *Active[T]) DispatchAll(event Event) {
 		maybeActive.Dispatch(event)
 		return true
 	})
+	return true
+}
+
+func FromContext[T context.Context](ctx T) (HSM, bool) {
+	switch any(ctx).(type) {
+	case HSM:
+		return any(ctx).(HSM), true
+	default:
+		hsm, ok := ctx.Value(Keys.HSM).(HSM)
+		if ok {
+			return hsm, true
+		}
+	}
+	return nil, false
 }
