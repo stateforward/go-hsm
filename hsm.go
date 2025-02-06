@@ -751,29 +751,6 @@ func After[T context.Context](expr func(hsm Active[T]) time.Duration, maybeName 
 	}
 }
 
-// var pool = sync.Pool{
-// 	New: func() any {
-// 		return &event{
-// 			kind: kind.Event,
-// 			name: "",
-// 			id:   "",
-// 			data: nil,
-// 		}
-// 	},
-// }
-
-// func NewEvent(name string, data any, maybeId ...string) *event {
-// 	event := &event{
-// 		kind: kind.Event,
-// 		name: name,
-// 		data: data,
-// 	}
-// 	if len(maybeId) > 0 {
-// 		event.id = maybeId[0]
-// 	}
-// 	return event
-// }
-
 func Final(name string) RedifinableElement {
 	return func(builder *Model, stack []elements.NamedElement) elements.NamedElement {
 		panic("not implemented")

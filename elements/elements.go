@@ -47,6 +47,15 @@ type Event struct {
 	Data any
 }
 
+func (e Event) WithData(data any) Event {
+	return Event{
+		Kind: e.Kind,
+		Name: e.Name,
+		Id:   e.Id,
+		Data: data,
+	}
+}
+
 type Constraint interface {
 	NamedElement
 	Expression() any
