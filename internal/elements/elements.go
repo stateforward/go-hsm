@@ -1,4 +1,4 @@
-package embedded
+package elements
 
 type Type interface{}
 
@@ -25,7 +25,7 @@ type Transition interface {
 	Target() string
 	Guard() string
 	Effect() string
-	Events() []*Event
+	Events() []Event
 }
 
 type Vertex interface {

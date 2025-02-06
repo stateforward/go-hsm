@@ -59,8 +59,8 @@ type THSM struct {
 func TestHSM(t *testing.T) {
 	trace := &Trace{}
 
-	mockAction := func(name string, async bool) func(ctx hsm.Active[*storage], event *hsm.Event) {
-		return func(ctx hsm.Active[*storage], event *hsm.Event) {
+	mockAction := func(name string, async bool) func(ctx hsm.Active[*storage], event hsm.Event) {
+		return func(ctx hsm.Active[*storage], event hsm.Event) {
 			if async {
 				trace.async = append(trace.async, name)
 			} else {
@@ -93,7 +93,7 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Trigger("0")),
 			),
 			hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s11.D.transition.effect", false)), hsm.Guard(
-				func(hsm hsm.Active[*storage], event *hsm.Event) bool {
+				func(hsm hsm.Active[*storage], event hsm.Event) bool {
 					check := hsm.Context.foo == 1
 					hsm.Context.foo = 0
 					return check
@@ -133,7 +133,7 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Target("/s/s2")),
 			)), hsm.Effect(mockAction("initial.effect", false))),
 		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1"), hsm.Target("/s"), hsm.Effect(mockAction("s1.D.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event hsm.Event) bool {
 				check := hsm.Context.foo == 0
 				hsm.Context.foo++
 				return check
@@ -144,7 +144,7 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("E"), hsm.Source("/s"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s.E.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("G"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s2/s21/s211"), hsm.Effect(mockAction("s11.G.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("I"), hsm.Source("/s"), hsm.Effect(mockAction("s.I.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event hsm.Event) bool {
 				check := hsm.Context.foo == 0
 				hsm.Context.foo = 1
 				return check
@@ -156,7 +156,7 @@ func TestHSM(t *testing.T) {
 			},
 			"s211.after",
 		), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s211.after.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event hsm.Event) bool {
 				triggered := !afterTriggered
 				afterTriggered = true
 				return triggered
@@ -165,14 +165,14 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("H"), hsm.Source("/s/s1/s11"), hsm.Target(
 			hsm.Choice(
 				hsm.Transition(hsm.Target("/s/s1"), hsm.Guard(
-					func(hsm hsm.Active[*storage], event *hsm.Event) bool {
+					func(hsm hsm.Active[*storage], event hsm.Event) bool {
 						return hsm.Context.foo == 0
 					},
 				)),
 				hsm.Transition(hsm.Target("/s/s2"), hsm.Effect(mockAction("s11.H.choice.transition.effect", false))),
 			),
 		), hsm.Effect(mockAction("s11.H.transition.effect", false))),
-		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx hsm.Active[*storage], event *hsm.Event) {
+		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx hsm.Active[*storage], event hsm.Event) {
 			trace.async = append(trace.async, "s11.J.transition.effect")
 			ctx.Dispatch(hsm.Event{
 				Name: "K",
@@ -394,7 +394,7 @@ func TestHSMDispatchAll(t *testing.T) {
 	if sm2.State() != "/foo" {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
-	hsm.DispatchAll(sm2, &hsm.Event{
+	hsm.DispatchAll(sm2, hsm.Event{
 		Name: "foo",
 	})
 	time.Sleep(time.Second)
@@ -405,7 +405,7 @@ func TestHSMDispatchAll(t *testing.T) {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
 }
-func noBehavior(hsm hsm.Active[context.Context], event *hsm.Event) {
+func noBehavior(hsm hsm.Active[context.Context], event hsm.Event) {
 
 }
 
