@@ -59,8 +59,8 @@ type THSM struct {
 func TestHSM(t *testing.T) {
 	trace := &Trace{}
 
-	mockAction := func(name string, async bool) func(ctx hsm.Active[*storage], event hsm.Event) {
-		return func(ctx hsm.Active[*storage], event hsm.Event) {
+	mockAction := func(name string, async bool) func(ctx hsm.Active[*storage], event *hsm.Event) {
+		return func(ctx hsm.Active[*storage], event *hsm.Event) {
 			if async {
 				trace.async = append(trace.async, name)
 			} else {
@@ -69,7 +69,9 @@ func TestHSM(t *testing.T) {
 		}
 	}
 	afterTriggered := false
-	dEvent := hsm.NewEvent("D", nil)
+	dEvent := hsm.Event{
+		Name: "D",
+	}
 	model := hsm.Define(
 		"TestHSM",
 		hsm.State("s",
@@ -91,7 +93,7 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Trigger("0")),
 			),
 			hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s1"), hsm.Effect(mockAction("s11.D.transition.effect", false)), hsm.Guard(
-				func(hsm hsm.Active[*storage], event hsm.Event) bool {
+				func(hsm hsm.Active[*storage], event *hsm.Event) bool {
 					check := hsm.Context.foo == 1
 					hsm.Context.foo = 0
 					return check
@@ -131,7 +133,7 @@ func TestHSM(t *testing.T) {
 				hsm.Transition(hsm.Target("/s/s2")),
 			)), hsm.Effect(mockAction("initial.effect", false))),
 		hsm.Transition(hsm.Trigger("D"), hsm.Source("/s/s1"), hsm.Target("/s"), hsm.Effect(mockAction("s1.D.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
 				check := hsm.Context.foo == 0
 				hsm.Context.foo++
 				return check
@@ -142,7 +144,7 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("E"), hsm.Source("/s"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s.E.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("G"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s2/s21/s211"), hsm.Effect(mockAction("s11.G.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("I"), hsm.Source("/s"), hsm.Effect(mockAction("s.I.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
 				check := hsm.Context.foo == 0
 				hsm.Context.foo = 1
 				return check
@@ -154,7 +156,7 @@ func TestHSM(t *testing.T) {
 			},
 			"s211.after",
 		), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(mockAction("s211.after.transition.effect", false)), hsm.Guard(
-			func(hsm hsm.Active[*storage], event hsm.Event) bool {
+			func(hsm hsm.Active[*storage], event *hsm.Event) bool {
 				triggered := !afterTriggered
 				afterTriggered = true
 				return triggered
@@ -163,16 +165,18 @@ func TestHSM(t *testing.T) {
 		hsm.Transition(hsm.Trigger("H"), hsm.Source("/s/s1/s11"), hsm.Target(
 			hsm.Choice(
 				hsm.Transition(hsm.Target("/s/s1"), hsm.Guard(
-					func(hsm hsm.Active[*storage], event hsm.Event) bool {
+					func(hsm hsm.Active[*storage], event *hsm.Event) bool {
 						return hsm.Context.foo == 0
 					},
 				)),
 				hsm.Transition(hsm.Target("/s/s2"), hsm.Effect(mockAction("s11.H.choice.transition.effect", false))),
 			),
 		), hsm.Effect(mockAction("s11.H.transition.effect", false))),
-		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx hsm.Active[*storage], event hsm.Event) {
+		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx hsm.Active[*storage], event *hsm.Event) {
 			trace.async = append(trace.async, "s11.J.transition.effect")
-			ctx.Dispatch(hsm.NewEvent("K", nil))
+			ctx.Dispatch(hsm.Event{
+				Name: "K",
+			})
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
 
@@ -193,7 +197,9 @@ func TestHSM(t *testing.T) {
 	}
 
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("G", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "G",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -203,7 +209,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("trace is not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("I", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "I",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -213,7 +221,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("A", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "A",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -223,7 +233,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("D", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "D",
+	})
 	if sm.State() != "/s" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -233,7 +245,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("D", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "D",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -243,7 +257,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("D", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "D",
+	})
 	if sm.State() != "/s/s1" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -253,7 +269,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("C", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "C",
+	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -263,7 +281,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("E", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "E",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -273,7 +293,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("E", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "E",
+	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -283,7 +305,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("G", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "G",
+	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -293,7 +317,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("I", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "I",
+	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
@@ -313,7 +339,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("H", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "H",
+	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct after H", "state", sm.State())
 	}
@@ -323,13 +351,17 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("J", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "J",
+	})
 	time.Sleep(time.Second)
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
 	trace.reset()
-	sm.Dispatch(hsm.NewEvent("K.P.A", nil))
+	sm.Dispatch(hsm.Event{
+		Name: "K.P.A",
+	})
 	if !trace.contains(Trace{
 		sync: []string{"s11.P.transition.effect"},
 	}) {
@@ -362,7 +394,9 @@ func TestHSMDispatchAll(t *testing.T) {
 	if sm2.State() != "/foo" {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
-	hsm.DispatchAll(sm2, hsm.NewEvent("foo", nil))
+	hsm.DispatchAll(sm2, &hsm.Event{
+		Name: "foo",
+	})
 	time.Sleep(time.Second)
 	if sm1.State() != "/bar" {
 		t.Fatal("state is not correct", "state", sm1.State())
@@ -371,7 +405,7 @@ func TestHSMDispatchAll(t *testing.T) {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
 }
-func noBehavior(hsm hsm.Active[context.Context], event hsm.Event) {
+func noBehavior(hsm hsm.Active[context.Context], event *hsm.Event) {
 
 }
 
@@ -448,8 +482,12 @@ var benchSM = hsm.New(context.Background(), &benchModel)
 
 func BenchmarkHSM(b *testing.B) {
 	b.ReportAllocs()
-	fooEvent := hsm.NewEvent("foo", nil)
-	barEvent := hsm.NewEvent("bar", nil)
+	fooEvent := hsm.Event{
+		Name: "foo",
+	}
+	barEvent := hsm.Event{
+		Name: "bar",
+	}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -464,7 +502,7 @@ func BenchmarkHSM(b *testing.B) {
 	}
 }
 
-func nonHSMLogic() func(event hsm.Event) bool {
+func nonHSMLogic() func(event *hsm.Event) bool {
 	type state int
 	const (
 		foo state = iota
@@ -472,21 +510,21 @@ func nonHSMLogic() func(event hsm.Event) bool {
 	)
 	currentState := foo
 	// Simulating entry/exit actions as no-ops to match HSM version
-	fooEntry := func(event hsm.Event) {}
-	fooExit := func(event hsm.Event) {}
-	barEntry := func(event hsm.Event) {}
-	barExit := func(event hsm.Event) {}
-	initialEffect := func(event hsm.Event) {}
+	fooEntry := func(event *hsm.Event) {}
+	fooExit := func(event *hsm.Event) {}
+	barEntry := func(event *hsm.Event) {}
+	barExit := func(event *hsm.Event) {}
+	initialEffect := func(event *hsm.Event) {}
 
 	// Transition effects as no-ops
-	fooToBarEffect := func(event hsm.Event) {}
-	barToFooEffect := func(event hsm.Event) {}
+	fooToBarEffect := func(event *hsm.Event) {}
+	barToFooEffect := func(event *hsm.Event) {}
 
 	// Event handling
-	handleEvent := func(event hsm.Event) bool {
+	handleEvent := func(event *hsm.Event) bool {
 		switch currentState {
 		case foo:
-			if event.Name() == "foo" {
+			if event.Name == "foo" {
 				fooExit(event)
 				fooToBarEffect(event)
 				currentState = bar
@@ -494,7 +532,7 @@ func nonHSMLogic() func(event hsm.Event) bool {
 				return true
 			}
 		case bar:
-			if event.Name() == "bar" {
+			if event.Name == "bar" {
 				barExit(event)
 				barToFooEffect(event)
 				currentState = foo
@@ -515,10 +553,14 @@ func BenchmarkNonHSM(b *testing.B) {
 	handler := nonHSMLogic()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if !handler(hsm.NewEvent("foo", nil)) {
+		if !handler(&hsm.Event{
+			Name: "foo",
+		}) {
 			b.Fatal("event not handled")
 		}
-		if !handler(hsm.NewEvent("bar", nil)) {
+		if !handler(&hsm.Event{
+			Name: "bar",
+		}) {
 			b.Fatal("event not handled")
 		}
 	}

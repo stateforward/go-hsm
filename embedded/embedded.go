@@ -1,9 +1,5 @@
 package embedded
 
-import (
-	"context"
-)
-
 type Type interface{}
 
 type Element interface {
@@ -29,7 +25,7 @@ type Transition interface {
 	Target() string
 	Guard() string
 	Effect() string
-	Events() []Event
+	Events() []*Event
 }
 
 type Vertex interface {
@@ -44,12 +40,11 @@ type State interface {
 	Exit() string
 }
 
-type Event interface {
-	Kind() uint64
-	Name() string
-	Data() any
-	Id() string
-	Clone(data any, maybeId ...string) Event
+type Event struct {
+	Kind uint64
+	Name string
+	Id   string
+	Data any
 }
 
 type Constraint interface {
@@ -60,13 +55,4 @@ type Constraint interface {
 type Behavior interface {
 	NamedElement
 	Action() any
-}
-
-type Active interface {
-	context.Context
-	NamedElement
-	State() string
-	Terminate()
-	Dispatch(event Event)
-	DispatchAll(event Event)
 }

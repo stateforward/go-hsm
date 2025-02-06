@@ -85,7 +85,7 @@ func generateTransition(builder *strings.Builder, depth int, transition embedded
 		if len(transition.Events()) > 0 {
 			names := []string{}
 			for _, event := range transition.Events() {
-				names = append(names, idFromQualifiedName(path.Base(event.Name())))
+				names = append(names, idFromQualifiedName(path.Base(event.Name)))
 			}
 			label = strings.Join(names, "|")
 		}
