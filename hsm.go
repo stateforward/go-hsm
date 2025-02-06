@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/stateforward/go-hsm/internal/elements"
+	"github.com/stateforward/go-hsm/elements"
 	"github.com/stateforward/go-hsm/kind"
 )
 
