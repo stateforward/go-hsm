@@ -8,19 +8,23 @@ type Type interface{}
 
 type Element interface {
 	Kind() uint64
-	Owner() string
-	QualifiedName() string
-	Name() string
 	Id() string
 }
 
-type Model interface {
+type NamedElement interface {
 	Element
-	Namespace() map[string]Element
+	Owner() string
+	QualifiedName() string
+	Name() string
+}
+
+type Model interface {
+	NamedElement
+	Namespace() map[string]NamedElement
 }
 
 type Transition interface {
-	Element
+	NamedElement
 	Source() string
 	Target() string
 	Guard() string
@@ -29,7 +33,7 @@ type Transition interface {
 }
 
 type Vertex interface {
-	Element
+	NamedElement
 	Transitions() []string
 }
 
@@ -49,18 +53,18 @@ type Event interface {
 }
 
 type Constraint interface {
-	Element
+	NamedElement
 	Expression() any
 }
 
 type Behavior interface {
-	Element
+	NamedElement
 	Action() any
 }
 
 type Active interface {
 	context.Context
-	Element
+	NamedElement
 	State() string
 	Terminate()
 	Dispatch(event Event)

@@ -17,7 +17,7 @@ func idFromQualifiedName(qualifiedName string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(qualifiedName, "/"), "."), "-", "_"), "/.", "/"), "/", ".")
 }
 
-func generateState(builder *strings.Builder, depth int, state embedded.Element, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
+func generateState(builder *strings.Builder, depth int, state embedded.NamedElement, model embedded.Model, allElements []embedded.NamedElement, visited map[string]any) {
 	id := idFromQualifiedName(state.QualifiedName())
 	indent := strings.Repeat(" ", depth*2)
 	composite := false
@@ -69,13 +69,13 @@ func generateState(builder *strings.Builder, depth int, state embedded.Element, 
 	}
 }
 
-func generateVertex(builder *strings.Builder, depth int, vertex embedded.Element, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
+func generateVertex(builder *strings.Builder, depth int, vertex embedded.NamedElement, model embedded.Model, allElements []embedded.NamedElement, visited map[string]any) {
 	if kind.IsKind(vertex.Kind(), kind.State) {
 		generateState(builder, depth, vertex, model, allElements, visited)
 	}
 }
 
-func generateTransition(builder *strings.Builder, depth int, transition embedded.Transition, _ []embedded.Element, visited map[string]any) {
+func generateTransition(builder *strings.Builder, depth int, transition embedded.Transition, _ []embedded.NamedElement, visited map[string]any) {
 	visited[transition.QualifiedName()] = struct{}{}
 	source := transition.Source()
 	label := ""
@@ -109,7 +109,7 @@ func generateTransition(builder *strings.Builder, depth int, transition embedded
 
 }
 
-func generateElements(builder *strings.Builder, depth int, model embedded.Model, allElements []embedded.Element, visited map[string]any) {
+func generateElements(builder *strings.Builder, depth int, model embedded.Model, allElements []embedded.NamedElement, visited map[string]any) {
 	fmt.Fprintf(builder, "@startuml %s\n", model.Id())
 	for _, element := range allElements {
 		if _, ok := visited[element.QualifiedName()]; ok {
@@ -137,7 +137,7 @@ func generateElements(builder *strings.Builder, depth int, model embedded.Model,
 
 func Generate(writer io.Writer, model embedded.Model) error {
 	var builder strings.Builder
-	elements := []embedded.Element{}
+	elements := []embedded.NamedElement{}
 	for _, element := range model.Namespace() {
 		elements = append(elements, element)
 	}

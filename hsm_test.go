@@ -453,13 +453,13 @@ func BenchmarkHSM(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		hsm.Dispatch(benchSM, fooEvent)
+		benchSM.Dispatch(fooEvent)
 		if benchSM.State() != "/bar" {
-			b.Fatal("state is not correct", "state", benchSM.State())
+			b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
 		}
 		benchSM.Dispatch(barEvent)
 		if benchSM.State() != "/foo" {
-			b.Fatal("state is not correct", "state", benchSM.State())
+			b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
 		}
 	}
 }

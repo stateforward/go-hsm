@@ -64,15 +64,15 @@ func (element *element) QualifiedName() string {
 
 /******* Model *******/
 
-type Element = embedded.Element
+type Element = embedded.NamedElement
 
 type Model struct {
 	state
-	namespace map[string]embedded.Element
+	namespace map[string]embedded.NamedElement
 	elements  []RedifinableElement
 }
 
-func (model *Model) Namespace() map[string]embedded.Element {
+func (model *Model) Namespace() map[string]embedded.NamedElement {
 	return model.namespace
 }
 
@@ -80,7 +80,7 @@ func (model *Model) Push(partial RedifinableElement) {
 	model.elements = append(model.elements, partial)
 }
 
-type RedifinableElement = func(model *Model, stack []embedded.Element) embedded.Element
+type RedifinableElement = func(model *Model, stack []embedded.NamedElement) embedded.NamedElement
 
 /******* Vertex *******/
 
@@ -170,14 +170,16 @@ type constraint[T context.Context] struct {
 type Event = embedded.Event
 
 type event struct {
-	element
+	kind uint64
+	name string
+	id   string
 	data any
 }
 
 func (evt *event) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"kind": evt.kind,
-		"name": evt.qualifiedName,
+		"name": evt.name,
 		"id":   evt.id,
 		"data": evt.data,
 	})
@@ -192,7 +194,7 @@ func (evt *event) UnmarshalJSON(data []byte) error {
 		evt.kind = kind
 	}
 	if name, ok := m["name"].(string); ok {
-		evt.qualifiedName = name
+		evt.name = name
 	}
 	if id, ok := m["id"].(string); ok {
 		evt.id = id
@@ -201,11 +203,25 @@ func (evt *event) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (evt *event) Kind() uint64 {
+	if evt == nil {
+		return 0
+	}
+	return evt.kind
+}
+
 func (evt *event) Name() string {
 	if evt == nil {
 		return ""
 	}
-	return evt.qualifiedName
+	return evt.name
+}
+
+func (evt *event) Id() string {
+	if evt == nil {
+		return ""
+	}
+	return evt.id
 }
 
 func (evt *event) Clone(data any, maybeId ...string) Event {
@@ -217,11 +233,9 @@ func (evt *event) Clone(data any, maybeId ...string) Event {
 		id = maybeId[0]
 	}
 	return &event{
-		element: element{
-			kind:          evt.kind,
-			qualifiedName: evt.qualifiedName,
-			id:            id,
-		},
+		kind: evt.kind,
+		name: evt.name,
+		id:   id,
 		data: data,
 	}
 }
@@ -233,7 +247,7 @@ func (event *event) Data() any {
 	return event.data
 }
 
-func apply(model *Model, stack []embedded.Element, partials ...RedifinableElement) {
+func apply(model *Model, stack []embedded.NamedElement, partials ...RedifinableElement) {
 	for _, partial := range partials {
 		partial(model, stack)
 	}
@@ -251,11 +265,11 @@ func Define[T interface{ RedifinableElement | string }](nameOrRedifinableElement
 		state: state{
 			vertex: vertex{element: element{kind: kind.State, qualifiedName: "/", id: name}, transitions: []string{}},
 		},
-		namespace: map[string]embedded.Element{},
+		namespace: map[string]embedded.NamedElement{},
 		elements:  redifinableElements,
 	}
 
-	stack := []embedded.Element{&model}
+	stack := []embedded.NamedElement{&model}
 	for len(model.elements) > 0 {
 		elements := model.elements
 		model.elements = []RedifinableElement{}
@@ -264,7 +278,7 @@ func Define[T interface{ RedifinableElement | string }](nameOrRedifinableElement
 	return model
 }
 
-func find(stack []embedded.Element, maybeKinds ...uint64) embedded.Element {
+func find(stack []embedded.NamedElement, maybeKinds ...uint64) embedded.NamedElement {
 	for i := len(stack) - 1; i >= 0; i-- {
 		if kind.IsKind(stack[i].Kind(), maybeKinds...) {
 			return stack[i]
@@ -273,7 +287,7 @@ func find(stack []embedded.Element, maybeKinds ...uint64) embedded.Element {
 	return nil
 }
 
-func get[T embedded.Element](model *Model, name string) T {
+func get[T embedded.NamedElement](model *Model, name string) T {
 	var zero T
 	if name == "" {
 		return zero
@@ -288,7 +302,7 @@ func get[T embedded.Element](model *Model, name string) T {
 }
 
 func State(name string, partialElements ...RedifinableElement) RedifinableElement {
-	return func(graph *Model, stack []embedded.Element) embedded.Element {
+	return func(graph *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.StateMachine, kind.State)
 		if owner == nil {
 			panic(fmt.Errorf("state must be called within a StateMachine or State"))
@@ -365,7 +379,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 	case RedifinableElement:
 		partialElements = append([]RedifinableElement{any(nameOrPartialElement).(RedifinableElement)}, partialElements...)
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Vertex)
 		if owner == nil {
 			panic(fmt.Errorf("transition must be called within a State or StateMachine"))
@@ -432,7 +446,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 				exit:  []string{sourceElement.QualifiedName()},
 			}
 		} else {
-			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
+			model.Push(func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 				// precompute transition paths for the source state and nested states
 				for qualifiedName, element := range model.namespace {
 					if strings.HasPrefix(qualifiedName, transition.source) && kind.IsKind(element.Kind(), kind.Vertex, kind.StateMachine) {
@@ -460,7 +474,7 @@ func Transition[T interface{ RedifinableElement | string }](nameOrPartialElement
 }
 
 func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("source must be called within a Transition"))
@@ -479,7 +493,7 @@ func Source[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 				}
 			}
 			// push a validation step to ensure the source exists after the model is built
-			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
+			model.Push(func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 				if _, ok := model.namespace[name]; !ok {
 					panic(fmt.Errorf("missing source %s", name))
 				}
@@ -502,7 +516,7 @@ func Defer(events ...uint64) RedifinableElement {
 }
 
 func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) RedifinableElement {
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("Target() must be called within a Transition"))
@@ -521,7 +535,7 @@ func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 				}
 			}
 			// push a validation step to ensure the target exists after the model is built
-			model.Push(func(model *Model, stack []embedded.Element) embedded.Element {
+			model.Push(func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 				if _, exists := model.namespace[qualifiedName]; !exists {
 					panic(fmt.Errorf("missing target %s for transition %s", target, transition.QualifiedName()))
 				}
@@ -545,7 +559,7 @@ func Effect[T context.Context](fn func(hsm Active[T], event Event), maybeName ..
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			slog.Error("effect must be called within a Transition")
@@ -566,7 +580,7 @@ func Guard[T context.Context](fn func(hsm Active[T], event Event) bool, maybeNam
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("guard must be called within a Transition"))
@@ -589,7 +603,7 @@ func Initial[T interface{ string | RedifinableElement }](elementOrName T, partia
 	case RedifinableElement:
 		partialElements = append([]RedifinableElement{any(elementOrName).(RedifinableElement)}, partialElements...)
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
 			panic(fmt.Errorf("initial must be called within a State or Model"))
@@ -628,7 +642,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 	case RedifinableElement:
 		partialElements = append([]RedifinableElement{any(elementOrName).(RedifinableElement)}, partialElements...)
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.State, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("you must call Choice() within a State or Transition"))
@@ -673,7 +687,7 @@ func Entry[T context.Context](fn func(ctx Active[T], event Event), maybeName ...
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
 			slog.Error("entry must be called within a State")
@@ -694,7 +708,7 @@ func Activity[T context.Context](fn func(hsm Active[T], event Event), maybeName 
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
 			slog.Error("activity must be called within a State")
@@ -716,7 +730,7 @@ func Exit[T context.Context](fn func(hsm Active[T], event Event), maybeName ...s
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
 			slog.Error("exit must be called within a State")
@@ -734,7 +748,7 @@ func Exit[T context.Context](fn func(hsm Active[T], event Event), maybeName ...s
 }
 
 func Trigger[T interface{ string | *event }](events ...T) RedifinableElement {
-	return func(model *Model, stack []embedded.Element) embedded.Element {
+	return func(model *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("trigger must be called within a Transition"))
@@ -745,7 +759,8 @@ func Trigger[T interface{ string | *event }](events ...T) RedifinableElement {
 			case string:
 				name := any(eventOrName).(string)
 				transition.events = append(transition.events, &event{
-					element: element{kind: kind.Event, qualifiedName: name},
+					kind: kind.Event,
+					name: name,
 				})
 			case *event:
 				event := any(eventOrName).(*event)
@@ -761,30 +776,37 @@ func After[T context.Context](expr func(hsm Active[T]) time.Duration, maybeName 
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
-	return func(builder *Model, stack []embedded.Element) embedded.Element {
+	return func(builder *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
 			panic(fmt.Errorf("after must be called within a Transition"))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
 		owner.(*transition).events = append(owner.(*transition).events, &event{
-			element: element{kind: kind.TimeEvent, qualifiedName: qualifiedName},
-			data:    expr,
+			kind: kind.TimeEvent,
+			name: qualifiedName,
+			data: expr,
 		})
 		return owner
 	}
 }
 
-// var pool = sync.Pool{
-// 	New: func() any {
-// 		return &event{}
-// 	},
-// }
+var pool = sync.Pool{
+	New: func() any {
+		return &event{
+			kind: kind.Event,
+			name: "",
+			id:   "",
+			data: nil,
+		}
+	},
+}
 
 func NewEvent(name string, data any, maybeId ...string) *event {
 	event := &event{
-		element: element{kind: kind.Event, qualifiedName: name},
-		data:    data,
+		kind: kind.Event,
+		name: name,
+		data: data,
 	}
 	if len(maybeId) > 0 {
 		event.id = maybeId[0]
@@ -793,7 +815,7 @@ func NewEvent(name string, data any, maybeId ...string) *event {
 }
 
 func Final(name string) RedifinableElement {
-	return func(builder *Model, stack []embedded.Element) embedded.Element {
+	return func(builder *Model, stack []embedded.NamedElement) embedded.NamedElement {
 		panic("not implemented")
 	}
 }
@@ -810,7 +832,7 @@ type subcontext = context.Context
 
 type hsm[T context.Context] struct {
 	behavior[T]
-	state      embedded.Element
+	state      embedded.NamedElement
 	model      *Model
 	active     map[string]*Active[T]
 	queue      *queue.Queue
@@ -946,7 +968,7 @@ func (active *Active[T]) activate(id string) *Active[T] {
 	return current
 }
 
-func (active *Active[T]) enter(element embedded.Element, event Event, defaultEntry bool) embedded.Element {
+func (active *Active[T]) enter(element embedded.NamedElement, event Event, defaultEntry bool) embedded.NamedElement {
 	if active == nil {
 		return nil
 	}
@@ -1019,7 +1041,7 @@ func (active *Active[T]) enter(element embedded.Element, event Event, defaultEnt
 	return nil
 }
 
-func (active *Active[T]) initial(element embedded.Element, event Event) embedded.Element {
+func (active *Active[T]) initial(element embedded.NamedElement, event Event) embedded.NamedElement {
 	if active == nil || element == nil {
 		return nil
 	}
@@ -1048,7 +1070,7 @@ func (active *Active[T]) initial(element embedded.Element, event Event) embedded
 	return element
 }
 
-func (active *Active[T]) exit(element embedded.Element, event Event) {
+func (active *Active[T]) exit(element embedded.NamedElement, event Event) {
 	if active == nil || element == nil {
 		return
 	}
@@ -1147,7 +1169,7 @@ func (active *Active[T]) evaluate(guard *constraint[T], event Event) bool {
 	)
 }
 
-func (active *Active[T]) transition(current embedded.Element, transition *transition, event Event) embedded.Element {
+func (active *Active[T]) transition(current embedded.NamedElement, transition *transition, event Event) embedded.NamedElement {
 	if active == nil {
 		return nil
 	}
@@ -1260,15 +1282,23 @@ func (active *Active[T]) process(event Event) {
 			}
 			state = source.Owner()
 		}
-		// pool.Put(event)
+		pool.Put(event)
 		event = active.queue.Pop()
 	}
 }
 
-func (active *Active[T]) dispatch(event Event) {
+func (active *Active[T]) dispatch(evt Event) {
 	if active == nil {
 		return
 	}
+	if active.state == nil {
+		return
+	}
+	event := pool.Get().(*event)
+	event.kind = evt.Kind() | kind.Event
+	event.name = evt.Name()
+	event.id = evt.Id()
+	event.data = evt.Data()
 	if active.trace != nil {
 		ctx, end := active.trace(active, "Dispatch", event)
 		defer end()
@@ -1277,9 +1307,6 @@ func (active *Active[T]) dispatch(event Event) {
 			hsm:        active.hsm,
 			cancel:     active.cancel,
 		}
-	}
-	if active.state == nil {
-		return
 	}
 	if active.processing.Load() {
 		active.queue.Push(event)
