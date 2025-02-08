@@ -41,11 +41,11 @@ type State interface {
 }
 
 type Event struct {
-	Kind uint64
-	Name string
-	Id   string
-	Data any
-	Done chan struct{}
+	Kind uint64        `json:"kind"`
+	Name string        `json:"name"`
+	Id   string        `json:"id"`
+	Data any           `json:"data"`
+	Done chan struct{} `json:"-"`
 }
 
 func (e Event) WithData(data any, maybeDone ...chan struct{}) Event {
