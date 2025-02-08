@@ -826,7 +826,7 @@ var Keys = struct {
 	HSM: key[HSM]{},
 }
 
-func Start[T Active](ctx context.Context, sm T, model *Model, options ...Config) T {
+func Start[T Active](ctx context.Context, sm T, model *Model, config ...Config) T {
 	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -838,6 +838,10 @@ func Start[T Active](ctx context.Context, sm T, model *Model, options ...Config)
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
+	}
+	if len(config) > 0 {
+		hsm.trace = config[0].Trace
+		hsm.id = config[0].Id
 	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
