@@ -172,6 +172,7 @@ func TestHSM(t *testing.T) {
 			trace.async = append(trace.async, "s11.J.transition.effect")
 			thsm.Dispatch(hsm.Event{
 				Name: "K",
+				Done: event.Done,
 			})
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
@@ -193,8 +194,9 @@ func TestHSM(t *testing.T) {
 	}
 
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "G",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -205,8 +207,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("trace is not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "I",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -217,8 +220,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "A",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -229,8 +233,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "D",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -241,8 +246,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "D",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -253,8 +259,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "D",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -265,8 +272,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "C",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -277,8 +285,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "E",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -289,8 +298,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "E",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -301,8 +311,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "G",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -313,8 +324,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "I",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct", "state", sm.State())
@@ -335,8 +347,9 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "H",
+		Done: make(chan struct{}),
 	})
 	if sm.State() != "/s/s2/s21/s211" {
 		t.Fatal("state is not correct after H", "state", sm.State())
@@ -347,16 +360,17 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "J",
+		Done: make(chan struct{}),
 	})
-	time.Sleep(time.Second)
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
 	trace.reset()
-	sm.Dispatch(hsm.Event{
+	<-sm.Dispatch(hsm.Event{
 		Name: "K.P.A",
+		Done: make(chan struct{}),
 	})
 	if !trace.contains(Trace{
 		sync: []string{"s11.P.transition.effect"},
@@ -480,18 +494,20 @@ func BenchmarkHSM(b *testing.B) {
 	b.ReportAllocs()
 	fooEvent := hsm.Event{
 		Name: "foo",
+		Done: make(chan struct{}),
 	}
 	barEvent := hsm.Event{
 		Name: "bar",
+		Done: make(chan struct{}),
 	}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		benchSM.Dispatch(fooEvent)
+		<-benchSM.Dispatch(fooEvent)
 		if benchSM.State() != "/bar" {
 			b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
 		}
-		benchSM.Dispatch(barEvent)
+		<-benchSM.Dispatch(barEvent)
 		if benchSM.State() != "/foo" {
 			b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
 		}

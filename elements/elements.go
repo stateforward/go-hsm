@@ -45,14 +45,30 @@ type Event struct {
 	Name string
 	Id   string
 	Data any
+	Done chan struct{}
 }
 
-func (e Event) WithData(data any) Event {
+func (e Event) WithData(data any, maybeDone ...chan struct{}) Event {
+	var done chan struct{}
+	if len(maybeDone) > 0 {
+		done = maybeDone[0]
+	}
 	return Event{
 		Kind: e.Kind,
 		Name: e.Name,
 		Id:   e.Id,
 		Data: data,
+		Done: done,
+	}
+}
+
+func (e Event) WithDone(done chan struct{}) Event {
+	return Event{
+		Kind: e.Kind,
+		Name: e.Name,
+		Id:   e.Id,
+		Data: e.Data,
+		Done: done,
 	}
 }
 

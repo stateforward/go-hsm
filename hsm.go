@@ -20,8 +20,8 @@ type Active interface {
 	Element
 	context.Context
 	State() string
-	Dispatch(event Event)
-	dispatch(ctx context.Context, event Event)
+	Dispatch(event Event) <-chan struct{}
+	dispatch(ctx context.Context, event Event) <-chan struct{}
 	stop()
 	start(Active)
 }
@@ -768,11 +768,11 @@ func (hsm *HSM) start(active Active) {
 	active.start(hsm)
 }
 
-func (hsm HSM) Dispatch(event Event) {
+func (hsm HSM) Dispatch(event Event) <-chan struct{} {
 	if hsm.Active == nil {
-		return
+		return done(event.Done)
 	}
-	hsm.Active.Dispatch(event)
+	return hsm.Active.Dispatch(event)
 }
 
 func (hsm HSM) State() string {
@@ -801,6 +801,7 @@ type hsm[T Active] struct {
 	processing atomic.Bool
 	context    T
 	trace      Trace
+	event      chan Event
 }
 
 type active struct {
@@ -838,6 +839,7 @@ func Start[T Active](ctx context.Context, sm T, model *Model, config ...Config) 
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
+		event:   make(chan Event),
 	}
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
@@ -872,8 +874,8 @@ func (sm *hsm[T]) start(active Active) {
 	sm.execute(sm.subcontext, &sm.behavior, noevent)
 }
 
-func (sm *hsm[T]) Dispatch(event Event) {
-	sm.dispatch(sm.subcontext, event)
+func (sm *hsm[T]) Dispatch(event Event) <-chan struct{} {
+	return sm.dispatch(sm.subcontext, event)
 }
 
 func (sm *hsm[T]) stop() {
@@ -1177,6 +1179,7 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) {
 	sm.processing.Store(true)
 	defer sm.processing.Store(false)
 	ok := true
+	// queued := false
 	for ok {
 		state := sm.state.QualifiedName()
 		for state != "/" {
@@ -1190,44 +1193,45 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) {
 			}
 			state = source.Owner()
 		}
+		done(event.Done)
 		event, ok = sm.queue.pop()
 	}
 }
 
-func (sm *hsm[T]) dispatch(ctx context.Context, event Event) {
+func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if sm == nil {
-		return
+		return done(event.Done)
 	}
 	if sm.state == nil {
-		return
+		return done(event.Done)
 	}
 	if event.Kind == 0 {
 		event.Kind = kind.Event
 	}
 	if sm.trace != nil {
 		var end func(...any)
-		ctx, end = sm.trace(ctx, "Dispatch", event)
+		_, end = sm.trace(ctx, "Dispatch", event)
 		defer end()
 	}
 	if sm.processing.Load() {
 		sm.queue.push(event)
-		return
+		return event.Done
 	}
 	sm.process(ctx, event)
+	return event.Done
 }
 
-func Dispatch(ctx context.Context, event Event) bool {
+func Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if hsm, ok := FromContext(ctx); ok {
-		hsm.dispatch(ctx, event)
-		return true
+		return hsm.dispatch(ctx, event)
 	}
-	return false
+	return done(event.Done)
 }
 
-func DispatchAll(ctx context.Context, event Event) bool {
+func DispatchAll(ctx context.Context, event Event) <-chan struct{} {
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
-		return false
+		return done(event.Done)
 	}
 	all.Range(func(value any, _ any) bool {
 		maybeSM, ok := value.(Active)
@@ -1237,7 +1241,7 @@ func DispatchAll(ctx context.Context, event Event) bool {
 		maybeSM.dispatch(ctx, event)
 		return true
 	})
-	return true
+	return event.Done
 }
 
 func FromContext(ctx context.Context) (Active, bool) {
@@ -1246,4 +1250,21 @@ func FromContext(ctx context.Context) (Active, bool) {
 		return hsm, true
 	}
 	return nil, false
+}
+
+func done(channel chan struct{}) <-chan struct{} {
+	if channel == nil {
+		return nil
+	}
+	select {
+	case _, ok := <-channel:
+		if !ok {
+			return channel
+		}
+		break
+	default:
+		break
+	}
+	close(channel)
+	return channel
 }
