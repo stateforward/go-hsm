@@ -183,14 +183,14 @@ func (transition *transition) Target() string {
 
 /******* Behavior *******/
 
-type behavior[T Active] struct {
+type behavior[T Context] struct {
 	element
 	method func(ctx context.Context, hsm T, event Event)
 }
 
 /******* Constraint *******/
 
-type constraint[T Active] struct {
+type constraint[T Context] struct {
 	element
 	expression func(ctx context.Context, hsm T, event Event) bool
 }
@@ -656,7 +656,7 @@ func Target[T interface{ RedefinableElement | string }](nameOrPartialElement T) 
 //	hsm.Effect(func(ctx context.Context, hsm *MyHSM, event Event) {
 //	    log.Printf("Transitioning with event: %s", event.Name)
 //	})
-func Effect[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
+func Effect[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
 	name := ".effect"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -685,7 +685,7 @@ func Effect[T Active](fn func(ctx context.Context, hsm T, event Event), maybeNam
 //	hsm.Guard(func(ctx context.Context, hsm *MyHSM, event Event) bool {
 //	    return hsm.counter > 10
 //	})
-func Guard[T Active](fn func(ctx context.Context, hsm T, event Event) bool, maybeName ...string) RedefinableElement {
+func Guard[T Context](fn func(ctx context.Context, hsm T, event Event) bool, maybeName ...string) RedefinableElement {
 	name := ".guard"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -829,7 +829,7 @@ func Choice[T interface{ RedefinableElement | string }](elementOrName T, partial
 //	hsm.Entry(func(ctx context.Context, hsm *MyHSM, event Event) {
 //	    log.Printf("Entering state with event: %s", event.Name)
 //	})
-func Entry[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
+func Entry[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
 	name := ".entry"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -865,7 +865,7 @@ func Entry[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName
 //	        }
 //	    }
 //	})
-func Activity[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
+func Activity[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
 	name := ".activity"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -895,7 +895,7 @@ func Activity[T Active](fn func(ctx context.Context, hsm T, event Event), maybeN
 //	hsm.Exit(func(ctx context.Context, hsm *MyHSM, event Event) {
 //	    log.Printf("Exiting state with event: %s", event.Name)
 //	})
-func Exit[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
+func Exit[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedefinableElement {
 	name := ".exit"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -966,7 +966,7 @@ func Trigger[T interface{ string | *Event | Event }](events ...T) RedefinableEle
 //	    hsm.Source("active"),
 //	    hsm.Target("timeout")
 //	)
-func After[T Active](expr func(ctx context.Context, hsm T) time.Duration, maybeName ...string) RedefinableElement {
+func After[T Context](expr func(ctx context.Context, hsm T) time.Duration, maybeName ...string) RedefinableElement {
 	name := ".after"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -1007,18 +1007,18 @@ func Final(name string) RedefinableElement {
 	}
 }
 
-// Active represents an active state machine instance that can process events and track state.
+// Context represents an active state machine instance that can process events and track state.
 // It provides methods for event dispatch and state management.
-type Active interface {
+type Context interface {
 	Element
-	context.Context
+	subcontext
 	// State returns the current state's qualified name.
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(event Event) <-chan struct{}
 	dispatch(ctx context.Context, event Event) <-chan struct{}
 	stop()
-	start(Active)
+	start(Context)
 }
 
 // HSM is the base type that should be embedded in custom state machine types.
@@ -1031,41 +1031,41 @@ type Active interface {
 //	    counter int
 //	}
 type HSM struct {
-	Active
+	Context
 }
 
-func (hsm *HSM) start(active Active) {
-	if hsm == nil || hsm.Active != nil {
+func (hsm *HSM) start(ctx Context) {
+	if hsm == nil || hsm.Context != nil {
 		return
 	}
-	hsm.Active = active
-	active.start(hsm)
+	hsm.Context = ctx
+	ctx.start(hsm)
 }
 
 func (hsm HSM) Dispatch(event Event) <-chan struct{} {
-	if hsm.Active == nil {
+	if hsm.Context == nil {
 		return done(event.Done)
 	}
-	return hsm.Active.Dispatch(event)
+	return hsm.Context.Dispatch(event)
 }
 
 func (hsm HSM) State() string {
-	if hsm.Active == nil {
+	if hsm.Context == nil {
 		return ""
 	}
-	return hsm.Active.State()
+	return hsm.Context.State()
 }
 
 func (hsm HSM) stop() {
-	if hsm.Active == nil {
+	if hsm.Context == nil {
 		return
 	}
-	hsm.Active.stop()
+	hsm.Context.stop()
 }
 
 type subcontext = context.Context
 
-type hsm[T Active] struct {
+type hsm[T Context] struct {
 	subcontext
 	behavior[T]
 	state      elements.NamedElement
@@ -1120,7 +1120,7 @@ var Keys = struct {
 //	    },
 //	    Id: "my-hsm-1",
 //	})
-func Start[T Active](ctx context.Context, sm T, model *Model, config ...Config) T {
+func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config) T {
 	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -1166,7 +1166,7 @@ func (sm *hsm[T]) State() string {
 	return sm.state.QualifiedName()
 }
 
-func (sm *hsm[T]) start(active Active) {
+func (sm *hsm[T]) start(active Context) {
 	sm.execute(sm.subcontext, &sm.behavior, noevent)
 }
 
@@ -1555,7 +1555,7 @@ func DispatchAll(ctx context.Context, event Event) <-chan struct{} {
 		return done(event.Done)
 	}
 	all.Range(func(_ any, value any) bool {
-		maybeSM, ok := value.(Active)
+		maybeSM, ok := value.(Context)
 		if !ok {
 			return true
 		}
@@ -1574,7 +1574,7 @@ func DispatchTo(ctx context.Context, id string, event Event) <-chan struct{} {
 	if !ok {
 		return done(event.Done)
 	}
-	maybeSM, ok := hsm.(Active)
+	maybeSM, ok := hsm.(Context)
 	if !ok {
 		return done(event.Done)
 	}
@@ -1589,8 +1589,8 @@ func DispatchTo(ctx context.Context, id string, event Event) <-chan struct{} {
 //	if sm, ok := hsm.FromContext(ctx); ok {
 //	    log.Printf("Current state: %s", sm.State())
 //	}
-func FromContext(ctx context.Context) (Active, bool) {
-	hsm, ok := ctx.Value(Keys.HSM).(Active)
+func FromContext(ctx context.Context) (Context, bool) {
+	hsm, ok := ctx.Value(Keys.HSM).(Context)
 	if ok {
 		return hsm, true
 	}
