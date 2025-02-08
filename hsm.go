@@ -16,13 +16,14 @@ import (
 
 var Kinds = kind.Kinds()
 
-type Context interface {
+type Active interface {
+	Element
 	context.Context
 	State() string
 	Dispatch(event Event)
 	dispatch(ctx context.Context, event Event)
 	stop()
-	start(Context)
+	start(Active)
 }
 
 /******* Element *******/
@@ -159,14 +160,14 @@ func (transition *transition) Target() string {
 
 /******* Behavior *******/
 
-type behavior[T Context] struct {
+type behavior[T Active] struct {
 	element
 	method func(ctx context.Context, hsm T, event Event)
 }
 
 /******* Constraint *******/
 
-type constraint[T Context] struct {
+type constraint[T Active] struct {
 	element
 	expression func(ctx context.Context, hsm T, event Event) bool
 }
@@ -514,7 +515,7 @@ func Target[T interface{ RedifinableElement | string }](nameOrPartialElement T) 
 	}
 }
 
-func Effect[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
+func Effect[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
 	name := ".effect"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -534,7 +535,7 @@ func Effect[T Context](fn func(ctx context.Context, hsm T, event Event), maybeNa
 	}
 }
 
-func Guard[T Context](fn func(ctx context.Context, hsm T, event Event) bool, maybeName ...string) RedifinableElement {
+func Guard[T Active](fn func(ctx context.Context, hsm T, event Event) bool, maybeName ...string) RedifinableElement {
 	name := ".guard"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -641,7 +642,7 @@ func Choice[T interface{ RedifinableElement | string }](elementOrName T, partial
 	}
 }
 
-func Entry[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
+func Entry[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
 	name := ".entry"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -661,7 +662,7 @@ func Entry[T Context](fn func(ctx context.Context, hsm T, event Event), maybeNam
 	}
 }
 
-func Activity[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
+func Activity[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
 	name := ".activity"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -682,7 +683,7 @@ func Activity[T Context](fn func(ctx context.Context, hsm T, event Event), maybe
 	}
 }
 
-func Exit[T Context](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
+func Exit[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName ...string) RedifinableElement {
 	name := ".exit"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -729,7 +730,7 @@ func Trigger[T interface{ string | *Event | Event }](events ...T) RedifinableEle
 	}
 }
 
-func After[T Context](expr func(ctx context.Context, hsm T) time.Duration, maybeName ...string) RedifinableElement {
+func After[T Active](expr func(ctx context.Context, hsm T) time.Duration, maybeName ...string) RedifinableElement {
 	name := ".after"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -756,41 +757,41 @@ func Final(name string) RedifinableElement {
 }
 
 type HSM struct {
-	Context
+	Active
 }
 
-func (hsm *HSM) start(active Context) {
-	if hsm == nil || hsm.Context != nil {
+func (hsm *HSM) start(active Active) {
+	if hsm == nil || hsm.Active != nil {
 		return
 	}
-	hsm.Context = active
+	hsm.Active = active
 	active.start(hsm)
 }
 
 func (hsm HSM) Dispatch(event Event) {
-	if hsm.Context == nil {
+	if hsm.Active == nil {
 		return
 	}
-	hsm.Context.Dispatch(event)
+	hsm.Active.Dispatch(event)
 }
 
 func (hsm HSM) State() string {
-	if hsm.Context == nil {
+	if hsm.Active == nil {
 		return ""
 	}
-	return hsm.Context.State()
+	return hsm.Active.State()
 }
 
 func (hsm HSM) stop() {
-	if hsm.Context == nil {
+	if hsm.Active == nil {
 		return
 	}
-	hsm.Context.stop()
+	hsm.Active.stop()
 }
 
 type subcontext = context.Context
 
-type hsm[T Context] struct {
+type hsm[T Active] struct {
 	subcontext
 	behavior[T]
 	state      elements.NamedElement
@@ -825,7 +826,7 @@ var Keys = struct {
 	HSM: key[HSM]{},
 }
 
-func Start[T Context](ctx context.Context, sm T, model *Model, options ...Config) T {
+func Start[T Active](ctx context.Context, sm T, model *Model, options ...Config) T {
 	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
@@ -863,7 +864,7 @@ func (sm *hsm[T]) State() string {
 	return sm.state.QualifiedName()
 }
 
-func (sm *hsm[T]) start(active Context) {
+func (sm *hsm[T]) start(active Active) {
 	sm.execute(sm.subcontext, &sm.behavior, noevent)
 }
 
@@ -1225,7 +1226,7 @@ func DispatchAll(ctx context.Context, event Event) bool {
 		return false
 	}
 	all.Range(func(value any, _ any) bool {
-		maybeSM, ok := value.(Context)
+		maybeSM, ok := value.(Active)
 		if !ok {
 			return true
 		}
@@ -1235,8 +1236,8 @@ func DispatchAll(ctx context.Context, event Event) bool {
 	return true
 }
 
-func FromContext(ctx context.Context) (Context, bool) {
-	hsm, ok := ctx.Value(Keys.HSM).(Context)
+func FromContext(ctx context.Context) (Active, bool) {
+	hsm, ok := ctx.Value(Keys.HSM).(Active)
 	if ok {
 		return hsm, true
 	}
