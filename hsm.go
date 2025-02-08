@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,6 +293,17 @@ func find(stack []elements.NamedElement, maybeKinds ...uint64) elements.NamedEle
 	return nil
 }
 
+func traceback(maybeError ...error) func(err error) {
+	_, file, line, _ := runtime.Caller(2)
+	fn := func(err error) {
+		panic(fmt.Sprintf("%s:%d: %v", file, line, err))
+	}
+	if len(maybeError) > 0 {
+		fn(maybeError[0])
+	}
+	return fn
+}
+
 func get[T elements.NamedElement](model *Model, name string) T {
 	var zero T
 	if name == "" {
@@ -344,10 +356,11 @@ func id() string {
 //	    })
 //	)
 func State(name string, partialElements ...RedefinableElement) RedefinableElement {
+	traceback := traceback()
 	return func(graph *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.StateMachine, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("state \"%s\" must be called within Define() or State()", name))
+			traceback(fmt.Errorf("state \"%s\" must be called within Define() or State()", name))
 		}
 		element := &state{
 			vertex: vertex{element: element{kind: kind.State, qualifiedName: path.Join(owner.QualifiedName(), name)}, transitions: []string{}},
@@ -437,13 +450,14 @@ func Transition[T interface{ RedefinableElement | string }](nameOrPartialElement
 	case RedefinableElement:
 		partialElements = append([]RedefinableElement{any(nameOrPartialElement).(RedefinableElement)}, partialElements...)
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Vertex)
 		if name == "" {
 			name = fmt.Sprintf("transition_%d", len(model.namespace))
 		}
 		if owner == nil {
-			panic(fmt.Errorf("transition \"%s\" must be called within a State() or Define()", name))
+			traceback(fmt.Errorf("transition \"%s\" must be called within a State() or Define()", name))
 		}
 		transition := &transition{
 			events: []Event{},
@@ -462,7 +476,7 @@ func Transition[T interface{ RedefinableElement | string }](nameOrPartialElement
 		}
 		sourceElement, ok := model.namespace[transition.source]
 		if !ok {
-			panic(fmt.Errorf("missing source \"%s\" for transition \"%s\"", transition.source, transition.QualifiedName()))
+			traceback(fmt.Errorf("missing source \"%s\" for transition \"%s\"", transition.source, transition.QualifiedName()))
 		}
 		switch source := sourceElement.(type) {
 		case *state:
@@ -477,7 +491,7 @@ func Transition[T interface{ RedefinableElement | string }](nameOrPartialElement
 			// transition.events = append(transition.events, &event{
 			// 	element: element{kind: kind.CompletionEvent, qualifiedName: qualifiedName},
 			// })
-			panic(fmt.Errorf("completion transition not implemented"))
+			traceback(fmt.Errorf("completion transition not implemented"))
 		}
 		if transition.target == transition.source {
 			transition.kind = kind.Self
@@ -541,14 +555,16 @@ func Transition[T interface{ RedefinableElement | string }](nameOrPartialElement
 //	    hsm.Target("running")
 //	)
 func Source[T interface{ RedefinableElement | string }](nameOrPartialElement T) RedefinableElement {
+	// Capture the stack depth for use in traceback
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("hsm.Source() must be called within a hsm.Transition()"))
+			traceback(fmt.Errorf("hsm.Source() must be called within a hsm.Transition()"))
 		}
 		transition := owner.(*transition)
 		if transition.source != "." && transition.source != "" {
-			panic(fmt.Errorf("transition \"%s\" already has a source \"%s\"", transition.QualifiedName(), transition.source))
+			traceback(fmt.Errorf("transition \"%s\" already has a source \"%s\"", transition.QualifiedName(), transition.source))
 		}
 		var name string
 		switch any(nameOrPartialElement).(type) {
@@ -562,14 +578,14 @@ func Source[T interface{ RedefinableElement | string }](nameOrPartialElement T) 
 			// push a validation step to ensure the source exists after the model is built
 			model.Push(func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 				if _, ok := model.namespace[name]; !ok {
-					panic(fmt.Errorf("missing source \"%s\" for transition \"%s\"", name, transition.QualifiedName()))
+					traceback(fmt.Errorf("missing source \"%s\" for transition \"%s\"", name, transition.QualifiedName()))
 				}
 				return owner
 			})
 		case RedefinableElement:
 			element := any(nameOrPartialElement).(RedefinableElement)(model, stack)
 			if element == nil {
-				panic(fmt.Errorf("transition \"%s\" source is nil", transition.QualifiedName()))
+				traceback(fmt.Errorf("transition \"%s\" source is nil", transition.QualifiedName()))
 			}
 			name = element.QualifiedName()
 		}
@@ -579,7 +595,8 @@ func Source[T interface{ RedefinableElement | string }](nameOrPartialElement T) 
 }
 
 func Defer(events ...uint64) RedefinableElement {
-	panic("not implemented")
+	traceback(fmt.Errorf("not implemented"))
+	return nil
 }
 
 // Target specifies the target state of a transition.
@@ -592,14 +609,15 @@ func Defer(events ...uint64) RedefinableElement {
 //	    hsm.Target("running")
 //	)
 func Target[T interface{ RedefinableElement | string }](nameOrPartialElement T) RedefinableElement {
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("Target() must be called within Transition()"))
+			traceback(fmt.Errorf("Target() must be called within Transition()"))
 		}
 		transition := owner.(*transition)
 		if transition.target != "" {
-			panic(fmt.Errorf("transition \"%s\" already has target \"%s\"", transition.QualifiedName(), transition.target))
+			traceback(fmt.Errorf("transition \"%s\" already has target \"%s\"", transition.QualifiedName(), transition.target))
 		}
 		var qualifiedName string
 		switch target := any(nameOrPartialElement).(type) {
@@ -613,14 +631,14 @@ func Target[T interface{ RedefinableElement | string }](nameOrPartialElement T) 
 			// push a validation step to ensure the target exists after the model is built
 			model.Push(func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 				if _, exists := model.namespace[qualifiedName]; !exists {
-					panic(fmt.Errorf("missing target \"%s\" for transition \"%s\"", target, transition.QualifiedName()))
+					traceback(fmt.Errorf("missing target \"%s\" for transition \"%s\"", target, transition.QualifiedName()))
 				}
 				return transition
 			})
 		case RedefinableElement:
 			targetElement := target(model, stack)
 			if targetElement == nil {
-				panic(fmt.Errorf("transition \"%s\" target is nil", transition.QualifiedName()))
+				traceback(fmt.Errorf("transition \"%s\" target is nil", transition.QualifiedName()))
 			}
 			qualifiedName = targetElement.QualifiedName()
 		}
@@ -643,10 +661,11 @@ func Effect[T Active](fn func(ctx context.Context, hsm T, event Event), maybeNam
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("effect must be called within a Transition"))
+			traceback(fmt.Errorf("effect must be called within a Transition"))
 		}
 		behavior := &behavior[T]{
 			element: element{kind: kind.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -671,10 +690,11 @@ func Guard[T Active](fn func(ctx context.Context, hsm T, event Event) bool, mayb
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("guard must be called within a Transition"))
+			traceback(fmt.Errorf("guard must be called within a Transition"))
 		}
 		constraint := &constraint[T]{
 			element:    element{kind: kind.Constraint, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -704,32 +724,33 @@ func Initial[T interface{ string | RedefinableElement }](elementOrName T, partia
 	case RedefinableElement:
 		partialElements = append([]RedefinableElement{any(elementOrName).(RedefinableElement)}, partialElements...)
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("initial must be called within a State or Model"))
+			traceback(fmt.Errorf("initial must be called within a State or Model"))
 		}
 		initial := &vertex{
 			element: element{kind: kind.Initial, qualifiedName: path.Join(owner.QualifiedName(), name)},
 		}
 		if model.namespace[initial.QualifiedName()] != nil {
-			panic(fmt.Errorf("initial \"%s\" state already exists for \"%s\"", initial.QualifiedName(), owner.QualifiedName()))
+			traceback(fmt.Errorf("initial \"%s\" state already exists for \"%s\"", initial.QualifiedName(), owner.QualifiedName()))
 		}
 		model.namespace[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
 		transition := (Transition(Source(initial.QualifiedName()), partialElements...)(model, stack)).(*transition)
 		// validation logic
 		if transition.guard != "" {
-			panic(fmt.Errorf("initial \"%s\" cannot have a guard", initial.QualifiedName()))
+			traceback(fmt.Errorf("initial \"%s\" cannot have a guard", initial.QualifiedName()))
 		}
 		if len(transition.events) > 0 {
-			panic(fmt.Errorf("initial \"%s\" cannot have triggers", initial.QualifiedName()))
+			traceback(fmt.Errorf("initial \"%s\" cannot have triggers", initial.QualifiedName()))
 		}
 		if !strings.HasPrefix(transition.target, owner.QualifiedName()) {
-			panic(fmt.Errorf("initial \"%s\" must target a nested state not \"%s\"", initial.QualifiedName(), transition.target))
+			traceback(fmt.Errorf("initial \"%s\" must target a nested state not \"%s\"", initial.QualifiedName(), transition.target))
 		}
 		if len(initial.transitions) > 1 {
-			panic(fmt.Errorf("initial \"%s\" cannot have multiple transitions %v", initial.QualifiedName(), initial.transitions))
+			traceback(fmt.Errorf("initial \"%s\" cannot have multiple transitions %v", initial.QualifiedName(), initial.transitions))
 		}
 		return transition
 	}
@@ -759,21 +780,22 @@ func Choice[T interface{ RedefinableElement | string }](elementOrName T, partial
 	case RedefinableElement:
 		partialElements = append([]RedefinableElement{any(elementOrName).(RedefinableElement)}, partialElements...)
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.State, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("you must call Choice() within a State or Transition"))
+			traceback(fmt.Errorf("you must call Choice() within a State or Transition"))
 		} else if kind.IsKind(owner.Kind(), kind.Transition) {
 			transition := owner.(*transition)
 			source := transition.source
 			owner = model.namespace[source]
 			if owner == nil {
-				panic(fmt.Errorf("transition \"%s\" targetting \"%s\" requires a source state when using Choice()", transition.QualifiedName(), transition.target))
+				traceback(fmt.Errorf("transition \"%s\" targetting \"%s\" requires a source state when using Choice()", transition.QualifiedName(), transition.target))
 			} else if kind.IsKind(owner.Kind(), kind.Pseudostate) {
 				// pseudostates aren't a namespace, so we need to find the containing state
 				owner = find(stack, kind.State)
 				if owner == nil {
-					panic(fmt.Errorf("you must call Choice() within a State"))
+					traceback(fmt.Errorf("you must call Choice() within a State"))
 				}
 			}
 		}
@@ -788,11 +810,11 @@ func Choice[T interface{ RedefinableElement | string }](elementOrName T, partial
 		stack = append(stack, element)
 		apply(model, stack, partialElements...)
 		if len(element.transitions) == 0 {
-			panic(fmt.Errorf("you must define at least one transition for choice \"%s\"", qualifiedName))
+			traceback(fmt.Errorf("you must define at least one transition for choice \"%s\"", qualifiedName))
 		}
 		if defaultTransition := get[elements.Transition](model, element.transitions[len(element.transitions)-1]); defaultTransition != nil {
 			if defaultTransition.Guard() != "" {
-				panic(fmt.Errorf("the last transition of choice state \"%s\" cannot have a guard", qualifiedName))
+				traceback(fmt.Errorf("the last transition of choice state \"%s\" cannot have a guard", qualifiedName))
 			}
 		}
 		return element
@@ -812,10 +834,11 @@ func Entry[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("entry must be called within a State"))
+			traceback(fmt.Errorf("entry must be called within a State"))
 		}
 		element := &behavior[T]{
 			element: element{kind: kind.Behavior, qualifiedName: path.Join(owner.QualifiedName(), name)},
@@ -847,10 +870,11 @@ func Activity[T Active](fn func(ctx context.Context, hsm T, event Event), maybeN
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("activity must be called within a State"))
+			traceback(fmt.Errorf("activity must be called within a State"))
 		}
 
 		element := &behavior[T]{
@@ -876,10 +900,11 @@ func Exit[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName 
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.State)
 		if owner == nil {
-			panic(fmt.Errorf("exit must be called within a State"))
+			traceback(fmt.Errorf("exit must be called within a State"))
 		}
 
 		element := &behavior[T]{
@@ -903,10 +928,11 @@ func Exit[T Active](fn func(ctx context.Context, hsm T, event Event), maybeName 
 //	    hsm.Target("running")
 //	)
 func Trigger[T interface{ string | *Event | Event }](events ...T) RedefinableElement {
+	traceback := traceback()
 	return func(model *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("trigger must be called within a Transition"))
+			traceback(fmt.Errorf("trigger must be called within a Transition"))
 		}
 		transition := owner.(*transition)
 		for _, eventOrName := range events {
@@ -945,10 +971,11 @@ func After[T Active](expr func(ctx context.Context, hsm T) time.Duration, maybeN
 	if len(maybeName) > 0 {
 		name = maybeName[0]
 	}
+	traceback := traceback()
 	return func(builder *Model, stack []elements.NamedElement) elements.NamedElement {
 		owner := find(stack, kind.Transition)
 		if owner == nil {
-			panic(fmt.Errorf("after must be called within a Transition"))
+			traceback(fmt.Errorf("after must be called within a Transition"))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
 		owner.(*transition).events = append(owner.(*transition).events, Event{
@@ -975,7 +1002,8 @@ func After[T Active](expr func(ctx context.Context, hsm T) time.Duration, maybeN
 //	)
 func Final(name string) RedefinableElement {
 	return func(builder *Model, stack []elements.NamedElement) elements.NamedElement {
-		panic("not implemented")
+		traceback(fmt.Errorf("not implemented"))
+		return nil
 	}
 }
 
