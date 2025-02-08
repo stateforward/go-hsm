@@ -170,7 +170,7 @@ func TestHSM(t *testing.T) {
 		), hsm.Effect(mockAction("s11.H.transition.effect", false))),
 		hsm.Transition(hsm.Trigger("J"), hsm.Source("/s/s2/s21/s211"), hsm.Target("/s/s1/s11"), hsm.Effect(func(ctx context.Context, thsm *THSM, event hsm.Event) {
 			trace.async = append(trace.async, "s11.J.transition.effect")
-			thsm.Dispatch(ctx, hsm.Event{
+			thsm.Dispatch(hsm.Event{
 				Name: "K",
 			})
 		})),
@@ -193,7 +193,7 @@ func TestHSM(t *testing.T) {
 	}
 
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "G",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -205,7 +205,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("trace is not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "I",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -217,7 +217,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "A",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -229,7 +229,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "D",
 	})
 	if sm.State() != "/s" {
@@ -241,7 +241,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "D",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -253,7 +253,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "D",
 	})
 	if sm.State() != "/s/s1" {
@@ -265,7 +265,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "C",
 	})
 	if sm.State() != "/s/s2/s21/s211" {
@@ -277,7 +277,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "E",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -289,7 +289,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "E",
 	})
 	if sm.State() != "/s/s1/s11" {
@@ -301,7 +301,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "G",
 	})
 	if sm.State() != "/s/s2/s21/s211" {
@@ -313,7 +313,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "I",
 	})
 	if sm.State() != "/s/s2/s21/s211" {
@@ -335,7 +335,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "H",
 	})
 	if sm.State() != "/s/s2/s21/s211" {
@@ -347,7 +347,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "J",
 	})
 	time.Sleep(time.Second)
@@ -355,7 +355,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
 	trace.reset()
-	sm.Dispatch(ctx, hsm.Event{
+	sm.Dispatch(hsm.Event{
 		Name: "K.P.A",
 	})
 	if !trace.contains(Trace{
@@ -364,200 +364,200 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	// sm.Terminate()
-	// if sm.State() != "" {
-	// 	t.Fatal("state is not correct", "state", sm.State())
-	// }
-	// if !trace.matches(Trace{
-	// 	sync: []string{"s3.exit", "s.exit"},
-	// }) {
-	// 	t.Fatal("transition actions are not correct", "trace", trace)
-	// }
+	hsm.Stop(sm)
+	if sm.State() != "" {
+		t.Fatal("state is not correct", "state", sm.State())
+	}
+	if !trace.matches(Trace{
+		sync: []string{"s3.exit", "s.exit"},
+	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
+	}
 }
 
-// func TestHSMDispatchAll(t *testing.T) {
-// 	model := hsm.Define(
-// 		"TestHSM",
-// 		hsm.State("foo"),
-// 		hsm.State("bar"),
-// 		hsm.Transition(hsm.Trigger("foo"), hsm.Source("foo"), hsm.Target("bar")),
-// 		hsm.Transition(hsm.Trigger("bar"), hsm.Source("bar"), hsm.Target("foo")),
-// 		hsm.Initial(hsm.Target("foo")),
-// 	)
-// 	ctx := context.Background()
-// 	sm1 := hsm.Start(ctx, &THSM{}, &model)
-// 	sm2 := hsm.Start(sm1, &THSM{}, &model)
-// 	if sm2.State() != "/foo" {
-// 		t.Fatal("state is not correct", "state", sm2.State())
-// 	}
-// 	hsm.DispatchAll(sm2, hsm.Event{
-// 		Name: "foo",
-// 	})
-// 	time.Sleep(time.Second)
-// 	if sm1.State() != "/bar" {
-// 		t.Fatal("state is not correct", "state", sm1.State())
-// 	}
-// 	if sm2.State() != "/bar" {
-// 		t.Fatal("state is not correct", "state", sm2.State())
-// 	}
-// }
-// func noBehavior(ctx context.Context, hsm *THSM, event hsm.Event) {
+func TestHSMDispatchAll(t *testing.T) {
+	model := hsm.Define(
+		"TestHSM",
+		hsm.State("foo"),
+		hsm.State("bar"),
+		hsm.Transition(hsm.Trigger("foo"), hsm.Source("foo"), hsm.Target("bar")),
+		hsm.Transition(hsm.Trigger("bar"), hsm.Source("bar"), hsm.Target("foo")),
+		hsm.Initial(hsm.Target("foo")),
+	)
+	ctx := context.Background()
+	sm1 := hsm.Start(ctx, &THSM{}, &model)
+	sm2 := hsm.Start(sm1, &THSM{}, &model)
+	if sm2.State() != "/foo" {
+		t.Fatal("state is not correct", "state", sm2.State())
+	}
+	hsm.DispatchAll(sm2, hsm.Event{
+		Name: "foo",
+	})
+	time.Sleep(time.Second)
+	if sm1.State() != "/bar" {
+		t.Fatal("state is not correct", "state", sm1.State())
+	}
+	if sm2.State() != "/bar" {
+		t.Fatal("state is not correct", "state", sm2.State())
+	}
+}
+func noBehavior(ctx context.Context, hsm *THSM, event hsm.Event) {
+
+}
+
+func TestIsAncestor(t *testing.T) {
+	if !hsm.IsAncestor("/foo/bar", "/foo/bar/baz") {
+		t.Fatal("IsAncestor is not correct /foo/bar is an ancestor of /foo/bar/baz")
+	}
+	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar")
+	}
+	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar/baz")
+	}
+	if !hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct /foo/bar/baz is an ancestor of /foo/bar/baz/qux")
+	}
+	if !hsm.IsAncestor("/", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct / is an ancestor of /foo/bar/baz/qux")
+	}
+	if !hsm.IsAncestor("/foo/", "/foo/bar/baz/qux") {
+		t.Fatal("IsAncestor is not correct /foo/ is an ancestor of /foo/bar/baz/qux")
+	}
+}
+
+func TestLCA(t *testing.T) {
+	if hsm.LCA("/foo/bar", "/foo/bar/baz") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar", "/foo/bar/baz"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz") != "/foo/bar" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz"))
+	}
+	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux") != "/foo/bar/baz" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("/", "/foo/bar/baz/qux") != "/" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("", "/foo/bar/baz/qux") != "/foo/bar/baz/qux" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("", "/foo/bar/baz/qux"))
+	}
+	if hsm.LCA("/foo/bar/baz/qux", "") != "/foo/bar/baz/qux" {
+		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz/qux", ""))
+	}
+}
 
 // }
+var benchModel = hsm.Define(
+	"TestHSM",
+	hsm.State("foo", hsm.Entry(noBehavior),
+		hsm.Exit(noBehavior)),
 
-// func TestIsAncestor(t *testing.T) {
-// 	if !hsm.IsAncestor("/foo/bar", "/foo/bar/baz") {
-// 		t.Fatal("IsAncestor is not correct /foo/bar is an ancestor of /foo/bar/baz")
-// 	}
-// 	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar") {
-// 		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar")
-// 	}
-// 	if hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz") {
-// 		t.Fatal("IsAncestor is not correct /foo/bar/baz is not an ancestor of /foo/bar/baz")
-// 	}
-// 	if !hsm.IsAncestor("/foo/bar/baz", "/foo/bar/baz/qux") {
-// 		t.Fatal("IsAncestor is not correct /foo/bar/baz is an ancestor of /foo/bar/baz/qux")
-// 	}
-// 	if !hsm.IsAncestor("/", "/foo/bar/baz/qux") {
-// 		t.Fatal("IsAncestor is not correct / is an ancestor of /foo/bar/baz/qux")
-// 	}
-// 	if !hsm.IsAncestor("/foo/", "/foo/bar/baz/qux") {
-// 		t.Fatal("IsAncestor is not correct /foo/ is an ancestor of /foo/bar/baz/qux")
-// 	}
-// }
+	hsm.State("bar", hsm.Entry(noBehavior),
+		hsm.Exit(noBehavior)),
 
-// func TestLCA(t *testing.T) {
-// 	if hsm.LCA("/foo/bar", "/foo/bar/baz") != "/foo/bar" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar", "/foo/bar/baz"))
-// 	}
-// 	if hsm.LCA("/foo/bar/baz", "/foo/bar") != "/foo/bar" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar"))
-// 	}
-// 	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz") != "/foo/bar" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz"))
-// 	}
-// 	if hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux") != "/foo/bar/baz" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz", "/foo/bar/baz/qux"))
-// 	}
-// 	if hsm.LCA("/", "/foo/bar/baz/qux") != "/" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/", "/foo/bar/baz/qux"))
-// 	}
-// 	if hsm.LCA("", "/foo/bar/baz/qux") != "/foo/bar/baz/qux" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("", "/foo/bar/baz/qux"))
-// 	}
-// 	if hsm.LCA("/foo/bar/baz/qux", "") != "/foo/bar/baz/qux" {
-// 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz/qux", ""))
-// 	}
-// }
+	hsm.Transition(
+		hsm.Trigger("foo"),
+		hsm.Source("foo"),
+		hsm.Target("bar"),
+		hsm.Effect(noBehavior),
+	),
+	hsm.Transition(
+		hsm.Trigger("bar"),
+		hsm.Source("bar"),
+		hsm.Target("foo"),
+		hsm.Effect(noBehavior),
+	),
+	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
+	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
+)
+var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
 
-// // }
-// var benchModel = hsm.Define(
-// 	"TestHSM",
-// 	hsm.State("foo", hsm.Entry(noBehavior),
-// 		hsm.Exit(noBehavior)),
+func BenchmarkHSM(b *testing.B) {
+	b.ReportAllocs()
+	fooEvent := hsm.Event{
+		Name: "foo",
+	}
+	barEvent := hsm.Event{
+		Name: "bar",
+	}
+	b.ResetTimer()
 
-// 	hsm.State("bar", hsm.Entry(noBehavior),
-// 		hsm.Exit(noBehavior)),
+	for i := 0; i < b.N; i++ {
+		benchSM.Dispatch(fooEvent)
+		if benchSM.State() != "/bar" {
+			b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
+		}
+		benchSM.Dispatch(barEvent)
+		if benchSM.State() != "/foo" {
+			b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
+		}
+	}
+}
 
-// 	hsm.Transition(
-// 		hsm.Trigger("foo"),
-// 		hsm.Source("foo"),
-// 		hsm.Target("bar"),
-// 		hsm.Effect(noBehavior),
-// 	),
-// 	hsm.Transition(
-// 		hsm.Trigger("bar"),
-// 		hsm.Source("bar"),
-// 		hsm.Target("foo"),
-// 		hsm.Effect(noBehavior),
-// 	),
-// 	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
-// 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
-// )
-// var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
+func nonHSMLogic() func(event *hsm.Event) bool {
+	type state int
+	const (
+		foo state = iota
+		bar
+	)
+	currentState := foo
+	// Simulating entry/exit actions as no-ops to match HSM version
+	fooEntry := func(event *hsm.Event) {}
+	fooExit := func(event *hsm.Event) {}
+	barEntry := func(event *hsm.Event) {}
+	barExit := func(event *hsm.Event) {}
+	initialEffect := func(event *hsm.Event) {}
 
-// func BenchmarkHSM(b *testing.B) {
-// 	b.ReportAllocs()
-// 	fooEvent := hsm.Event{
-// 		Name: "foo",
-// 	}
-// 	barEvent := hsm.Event{
-// 		Name: "bar",
-// 	}
-// 	b.ResetTimer()
+	// Transition effects as no-ops
+	fooToBarEffect := func(event *hsm.Event) {}
+	barToFooEffect := func(event *hsm.Event) {}
 
-// 	for i := 0; i < b.N; i++ {
-// 		benchSM.Dispatch(fooEvent)
-// 		if benchSM.State() != "/bar" {
-// 			b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
-// 		}
-// 		benchSM.Dispatch(barEvent)
-// 		if benchSM.State() != "/foo" {
-// 			b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
-// 		}
-// 	}
-// }
+	// Event handling
+	handleEvent := func(event *hsm.Event) bool {
+		switch currentState {
+		case foo:
+			if event.Name == "foo" {
+				fooExit(event)
+				fooToBarEffect(event)
+				currentState = bar
+				barEntry(event)
+				return true
+			}
+		case bar:
+			if event.Name == "bar" {
+				barExit(event)
+				barToFooEffect(event)
+				currentState = foo
+				fooEntry(event)
+				return true
+			}
+		}
+		return false
+	}
 
-// func nonHSMLogic() func(event *hsm.Event) bool {
-// 	type state int
-// 	const (
-// 		foo state = iota
-// 		bar
-// 	)
-// 	currentState := foo
-// 	// Simulating entry/exit actions as no-ops to match HSM version
-// 	fooEntry := func(event *hsm.Event) {}
-// 	fooExit := func(event *hsm.Event) {}
-// 	barEntry := func(event *hsm.Event) {}
-// 	barExit := func(event *hsm.Event) {}
-// 	initialEffect := func(event *hsm.Event) {}
+	// Initial transition
+	initialEffect(nil)
+	fooEntry(nil)
+	return handleEvent
+}
 
-// 	// Transition effects as no-ops
-// 	fooToBarEffect := func(event *hsm.Event) {}
-// 	barToFooEffect := func(event *hsm.Event) {}
-
-// 	// Event handling
-// 	handleEvent := func(event *hsm.Event) bool {
-// 		switch currentState {
-// 		case foo:
-// 			if event.Name == "foo" {
-// 				fooExit(event)
-// 				fooToBarEffect(event)
-// 				currentState = bar
-// 				barEntry(event)
-// 				return true
-// 			}
-// 		case bar:
-// 			if event.Name == "bar" {
-// 				barExit(event)
-// 				barToFooEffect(event)
-// 				currentState = foo
-// 				fooEntry(event)
-// 				return true
-// 			}
-// 		}
-// 		return false
-// 	}
-
-// 	// Initial transition
-// 	initialEffect(nil)
-// 	fooEntry(nil)
-// 	return handleEvent
-// }
-
-// func BenchmarkNonHSM(b *testing.B) {
-// 	handler := nonHSMLogic()
-// 	b.ResetTimer()
-// 	for i := 0; i < b.N; i++ {
-// 		if !handler(&hsm.Event{
-// 			Name: "foo",
-// 		}) {
-// 			b.Fatal("event not handled")
-// 		}
-// 		if !handler(&hsm.Event{
-// 			Name: "bar",
-// 		}) {
-// 			b.Fatal("event not handled")
-// 		}
-// 	}
-// }
+func BenchmarkNonHSM(b *testing.B) {
+	handler := nonHSMLogic()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !handler(&hsm.Event{
+			Name: "foo",
+		}) {
+			b.Fatal("event not handled")
+		}
+		if !handler(&hsm.Event{
+			Name: "bar",
+		}) {
+			b.Fatal("event not handled")
+		}
+	}
+}

@@ -19,7 +19,7 @@ var Kinds = kind.Kinds()
 type Context interface {
 	context.Context
 	State() string
-	Dispatch(ctx context.Context, event Event)
+	Dispatch(event Event)
 	dispatch(ctx context.Context, event Event)
 	stop()
 	start(Context)
@@ -767,11 +767,11 @@ func (hsm *HSM) start(active Context) {
 	active.start(hsm)
 }
 
-func (hsm HSM) Dispatch(ctx context.Context, event Event) {
+func (hsm HSM) Dispatch(event Event) {
 	if hsm.Context == nil {
 		return
 	}
-	hsm.Context.Dispatch(ctx, event)
+	hsm.Context.Dispatch(event)
 }
 
 func (hsm HSM) State() string {
@@ -867,8 +867,8 @@ func (sm *hsm[T]) start(active Context) {
 	sm.execute(sm.subcontext, &sm.behavior, noevent)
 }
 
-func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) {
-	sm.dispatch(ctx, event)
+func (sm *hsm[T]) Dispatch(event Event) {
+	sm.dispatch(sm.subcontext, event)
 }
 
 func (sm *hsm[T]) stop() {
@@ -1213,7 +1213,7 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) {
 
 func Dispatch(ctx context.Context, event Event) bool {
 	if hsm, ok := FromContext(ctx); ok {
-		hsm.Dispatch(ctx, event)
+		hsm.dispatch(ctx, event)
 		return true
 	}
 	return false
@@ -1229,7 +1229,7 @@ func DispatchAll(ctx context.Context, event Event) bool {
 		if !ok {
 			return true
 		}
-		maybeSM.Dispatch(ctx, event)
+		maybeSM.dispatch(ctx, event)
 		return true
 	})
 	return true
