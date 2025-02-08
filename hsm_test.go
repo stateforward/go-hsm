@@ -2,7 +2,6 @@ package hsm_test
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"slices"
 	"testing"
@@ -486,24 +485,6 @@ func TestLCA(t *testing.T) {
 	if hsm.LCA("/foo/bar/baz/qux", "") != "/foo/bar/baz/qux" {
 		t.Fatal("LCA is not correct", "LCA", hsm.LCA("/foo/bar/baz/qux", ""))
 	}
-}
-
-func TestTraceback(t *testing.T) {
-	model := hsm.Define(
-		"TestHSM",
-		hsm.Initial(
-			hsm.Target("doesn't exist"),
-		),
-		hsm.State("foo", hsm.Entry(noBehavior),
-			hsm.Exit(noBehavior)),
-		hsm.Transition(
-			hsm.Trigger("foo"),
-			hsm.Source("foo"),
-			hsm.Target("bar"),
-			hsm.Effect(noBehavior),
-		),
-	)
-	slog.Info("model", "model", model)
 }
 
 // }
