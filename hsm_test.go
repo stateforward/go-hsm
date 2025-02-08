@@ -415,6 +415,29 @@ func TestHSMDispatchAll(t *testing.T) {
 		t.Fatal("state is not correct", "state", sm2.State())
 	}
 }
+
+func TestDispatchTo(t *testing.T) {
+	model := hsm.Define(
+		"TestHSM",
+		hsm.State("foo"),
+		hsm.State("bar"),
+		hsm.Transition(hsm.Trigger("foo"), hsm.Source("foo"), hsm.Target("bar")),
+		hsm.Transition(hsm.Trigger("bar"), hsm.Source("bar"), hsm.Target("foo")),
+		hsm.Initial(hsm.Target("foo")),
+	)
+	ctx := context.Background()
+	sm1 := hsm.Start(ctx, &THSM{}, &model, hsm.Config{Id: "sm1"})
+	sm2 := hsm.Start(sm1, &THSM{}, &model, hsm.Config{Id: "sm2"})
+	if sm2.State() != "/foo" {
+		t.Fatal("state is not correct", "state", sm2.State())
+	}
+	<-hsm.DispatchTo(sm2, "sm2", hsm.Event{
+		Name: "foo",
+	})
+	if sm2.State() != "/bar" {
+		t.Fatal("state is not correct", "state", sm2.State())
+	}
+}
 func noBehavior(ctx context.Context, hsm *THSM, event hsm.Event) {
 
 }

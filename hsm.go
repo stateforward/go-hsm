@@ -200,7 +200,13 @@ type constraint[T Active] struct {
 // Events can carry data and have completion tracking through the Done channel.
 type Event = elements.Event
 
-var noevent = Event{}
+var noevent = Event{
+	Done: func() chan struct{} {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}(),
+}
 
 type queue struct {
 	mutex     sync.RWMutex
@@ -298,6 +304,27 @@ func get[T elements.NamedElement](model *Model, name string) T {
 		}
 	}
 	return zero
+}
+
+var counter atomic.Uint64
+
+const (
+	idTimestampBits = 48
+	idCounterBits   = 16 // 64 - timestampBits
+	idTimestampMask = uint64((1 << idTimestampBits) - 1)
+	idCounterMask   = uint64((1 << idCounterBits) - 1)
+)
+
+// id generates a uint64 ID with configurable bits for timestamp
+// timestampBits must be between 1 and 63
+func id() string {
+	// Get timestamp and truncate to specified bits
+	timestamp := uint64(time.Now().UnixMilli()) & idTimestampMask
+	// Get count and truncate to remaining bits
+	counter := counter.Add(1) & idCounterMask
+
+	// Combine timestamp and counter
+	return strconv.FormatUint((timestamp<<idCounterBits)|counter, 32)
 }
 
 // State creates a new state element with the given name and optional child elements.
@@ -1083,12 +1110,15 @@ func Start[T Active](ctx context.Context, sm T, model *Model, config ...Config) 
 		hsm.trace = config[0].Trace
 		hsm.id = config[0].Id
 	}
+	if hsm.id == "" {
+		hsm.id = id()
+	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
 		all = &sync.Map{}
 	}
 	hsm.subcontext = context.WithValue(context.WithValue(context.Background(), Keys.All, all), Keys.HSM, hsm)
-	all.Store(hsm, struct{}{})
+	all.Store(hsm.id, hsm)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
 		hsm.processing.Store(true)
 		defer hsm.processing.Store(false)
@@ -1418,14 +1448,14 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 	return nil
 }
 
-func (sm *hsm[T]) process(ctx context.Context, event Event) {
+func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 	if sm.processing.Load() {
-		return
+		return noevent.Done
 	}
 	sm.processing.Store(true)
 	defer sm.processing.Store(false)
+	var results <-chan struct{} = event.Done
 	ok := true
-	// queued := false
 	for ok {
 		state := sm.state.QualifiedName()
 		for state != "/" {
@@ -1439,9 +1469,10 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) {
 			}
 			state = source.Owner()
 		}
-		done(event.Done)
+		results = done(event.Done)
 		event, ok = sm.queue.pop()
 	}
+	return results
 }
 
 func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
@@ -1463,8 +1494,7 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 		sm.queue.push(event)
 		return event.Done
 	}
-	sm.process(ctx, event)
-	return event.Done
+	return sm.process(ctx, event)
 }
 
 // Dispatch sends an event to a specific state machine instance.
@@ -1496,7 +1526,7 @@ func DispatchAll(ctx context.Context, event Event) <-chan struct{} {
 	if !ok {
 		return done(event.Done)
 	}
-	all.Range(func(value any, _ any) bool {
+	all.Range(func(_ any, value any) bool {
 		maybeSM, ok := value.(Active)
 		if !ok {
 			return true
@@ -1505,6 +1535,22 @@ func DispatchAll(ctx context.Context, event Event) <-chan struct{} {
 		return true
 	})
 	return event.Done
+}
+
+func DispatchTo(ctx context.Context, id string, event Event) <-chan struct{} {
+	all, ok := ctx.Value(Keys.All).(*sync.Map)
+	if !ok {
+		return done(event.Done)
+	}
+	hsm, ok := all.Load(id)
+	if !ok {
+		return done(event.Done)
+	}
+	maybeSM, ok := hsm.(Active)
+	if !ok {
+		return done(event.Done)
+	}
+	return maybeSM.dispatch(ctx, event)
 }
 
 // FromContext retrieves a state machine instance from a context.
@@ -1525,7 +1571,7 @@ func FromContext(ctx context.Context) (Active, bool) {
 
 func done(channel chan struct{}) <-chan struct{} {
 	if channel == nil {
-		return nil
+		return noevent.Done
 	}
 	select {
 	case _, ok := <-channel:
