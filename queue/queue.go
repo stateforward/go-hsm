@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/stateforward/go-hsm/elements"
 )
@@ -31,9 +30,7 @@ func (q *Queue) Push(event elements.Event) {
 	var events []elements.Event
 	select {
 	case events = <-q.events:
-		slog.Info("queue is not empty", "event", event)
 	case <-q.empty:
-		slog.Info("queue is empty", "event", event)
 	}
 	events = append(events, event)
 	q.events <- events
@@ -43,9 +40,7 @@ func (q *Queue) Pop(ctx context.Context) (elements.Event, error) {
 	var events []elements.Event
 	select {
 	case events = <-q.events:
-		slog.Info("queue is not empty", "events", events)
 	case <-ctx.Done():
-		// slog.Info("queue is emptry", "events", events)
 		return elements.Event{}, ctx.Err()
 	}
 	event := events[0]

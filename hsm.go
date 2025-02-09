@@ -2,6 +2,7 @@ package hsm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"runtime"
@@ -15,7 +16,12 @@ import (
 	"github.com/stateforward/go-hsm/kind"
 )
 
-var Kinds = kind.Kinds()
+var (
+	Kinds           = kind.Kinds()
+	ErrNilHSM       = errors.New("hsm is nil")
+	ErrInvalidState = errors.New("invalid state")
+	ErrMissingHSM   = errors.New("missing hsm in context")
+)
 
 // Package hsm provides a powerful hierarchical state machine (HSM) implementation for Go.
 // It enables modeling complex state-driven systems with features like hierarchical states,
@@ -291,6 +297,10 @@ func find(stack []elements.NamedElement, maybeKinds ...uint64) elements.NamedEle
 		}
 	}
 	return nil
+}
+
+func isKind(el elements.NamedElement, k uint64) bool {
+	return kind.IsKind(el.Kind(), k)
 }
 
 func traceback(maybeError ...error) func(err error) {
@@ -1016,9 +1026,10 @@ type Context interface {
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(event Event) <-chan struct{}
-	dispatch(ctx context.Context, event Event) <-chan struct{}
+	Wait(ctx context.Context, state string) error
 	Stop()
 	start(Context)
+	dispatch(ctx context.Context, event Event) <-chan struct{}
 }
 
 // HSM is the base type that should be embedded in custom state machine types.
@@ -1040,13 +1051,6 @@ func (hsm *HSM) start(ctx Context) {
 	}
 	hsm.Context = ctx
 	ctx.start(hsm)
-}
-
-func (hsm HSM) Dispatch(event Event) <-chan struct{} {
-	if hsm.Context == nil {
-		return done(event.Done)
-	}
-	return hsm.Context.Dispatch(event)
 }
 
 func (hsm HSM) State() string {
@@ -1081,6 +1085,7 @@ type hsm[T Context] struct {
 	processing atomic.Bool
 	context    T
 	trace      Trace
+	waiting    map[string][]chan struct{}
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1131,6 +1136,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
+		waiting: map[string][]chan struct{}{},
 	}
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
@@ -1486,17 +1492,18 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 	var results <-chan struct{} = event.Done
 	ok := true
 	for ok {
-		state := sm.state.QualifiedName()
-		for state != "/" {
-			source := get[elements.Vertex](sm.model, state)
+		qualifiedName := sm.state.QualifiedName()
+		for qualifiedName != "/" {
+			source := get[elements.Vertex](sm.model, qualifiedName)
 			if source == nil {
 				break
 			}
 			if transition := sm.enabled(ctx, source, event); transition != nil {
 				sm.state = sm.transition(ctx, sm.state, transition, event)
+				sm.notify(sm.state.QualifiedName())
 				break
 			}
-			state = source.Owner()
+			qualifiedName = source.Owner()
 		}
 		results = done(event.Done)
 		event, ok = sm.queue.pop()
@@ -1524,6 +1531,40 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 		return event.Done
 	}
 	return sm.process(ctx, event)
+}
+
+func (sm *hsm[T]) Wait(ctx context.Context, qualifiedName string) error {
+	if sm == nil {
+		return ErrNilHSM
+	}
+	if sm.state.QualifiedName() == qualifiedName {
+		return nil
+	}
+	state, ok := sm.model.namespace[qualifiedName]
+	if !ok || !isKind(state, kind.State) {
+		return ErrInvalidState
+	}
+	done := make(chan struct{})
+	sm.waiting[qualifiedName] = append(sm.waiting[qualifiedName], done)
+	select {
+	case <-ctx.Done():
+		close(done)
+		return ctx.Err()
+	case <-done:
+	}
+	return nil
+}
+
+func (sm *hsm[T]) notify(state string) {
+	if waiting, ok := sm.waiting[state]; ok {
+		for _, done := range waiting {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
+		delete(sm.waiting, state)
+	}
 }
 
 // Dispatch sends an event to a specific state machine instance.
@@ -1613,4 +1654,11 @@ func done(channel chan struct{}) <-chan struct{} {
 	}
 	close(channel)
 	return channel
+}
+
+func Wait(ctx context.Context, qualifiedName string) error {
+	if hsm, ok := FromContext(ctx); ok {
+		return hsm.Wait(ctx, qualifiedName)
+	}
+	return ErrMissingHSM
 }

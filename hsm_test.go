@@ -337,7 +337,12 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	time.Sleep(3 * time.Second)
+	// time.Sleep(3 * time.Second)
+	subctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := sm.Wait(subctx, "/s/s1/s11"); err != nil {
+		t.Fatal("wait timedout", "error", err)
+	}
+	cancel()
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct after `after` transition", "state", sm.State())
 	}
@@ -364,6 +369,10 @@ func TestHSM(t *testing.T) {
 		Name: "J",
 		Done: make(chan struct{}),
 	})
+	err := sm.Wait(ctx, "/s/s3")
+	if err != nil {
+		t.Fatal("wait did not return", "error", err)
+	}
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
