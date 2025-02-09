@@ -1213,7 +1213,7 @@ func Stop(ctx context.Context) {
 	}
 }
 
-func (sm *hsm[T]) activate(id string) *active {
+func (sm *hsm[T]) activate(ctx context.Context, id string) *active {
 	current, ok := sm.active[id]
 	if !ok {
 		current = &active{
@@ -1221,7 +1221,7 @@ func (sm *hsm[T]) activate(id string) *active {
 		}
 		sm.active[id] = current
 	}
-	current.subcontext, current.cancel = context.WithCancel(sm)
+	current.subcontext, current.cancel = context.WithCancel(ctx)
 	return current
 }
 
@@ -1249,7 +1249,7 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 				for _, event := range element.Events() {
 					switch event.Kind {
 					case kind.TimeEvent:
-						ctx := sm.activate(event.Id)
+						ctx := sm.activate(ctx, event.Id)
 						go func(ctx *active, event Event) {
 							duration := event.Data.(func(ctx context.Context, hsm T) time.Duration)(
 								ctx,
@@ -1361,7 +1361,7 @@ func (sm *hsm[T]) execute(ctx context.Context, element *behavior[T], event Event
 	}
 	switch element.Kind() {
 	case kind.Concurrent:
-		ctx := sm.activate(element.QualifiedName())
+		ctx := sm.activate(ctx, element.QualifiedName())
 		go func(ctx *active, end func(...any)) {
 			if end != nil {
 				defer end()
