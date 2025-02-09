@@ -337,13 +337,11 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	// time.Sleep(3 * time.Second)
-	subctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, ok := <-sm.Wait(subctx, "/s/s1/s11")
-	if !ok {
-		t.Fatal("wait timedout")
+	select {
+	case <-sm.Wait("/s/s1/s11"):
+	case <-time.After(3 * time.Second):
+		t.Fatalf("wait timedout")
 	}
-	cancel()
 	if sm.State() != "/s/s1/s11" {
 		t.Fatal("state is not correct after `after` transition", "state", sm.State())
 	}
@@ -370,7 +368,7 @@ func TestHSM(t *testing.T) {
 		Name: "J",
 		Done: make(chan struct{}),
 	})
-	<-sm.Wait(ctx, "/s/s3")
+	<-sm.Wait("/s/s3")
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}

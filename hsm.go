@@ -1067,6 +1067,20 @@ func (hsm HSM) Stop() {
 	hsm.Context.Stop()
 }
 
+func (hsm HSM) Dispatch(event Event) <-chan struct{} {
+	if hsm.Context == nil {
+		return nil
+	}
+	return hsm.Context.Dispatch(event)
+}
+
+func (hsm HSM) Wait(state string) <-chan struct{} {
+	if hsm.Context == nil {
+		return nil
+	}
+	return hsm.Context.Wait(state)
+}
+
 type subcontext = context.Context
 
 type active struct {
