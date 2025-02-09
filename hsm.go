@@ -1026,7 +1026,7 @@ type Context interface {
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(event Event) <-chan struct{}
-	Wait(ctx context.Context, state string) <-chan struct{}
+	Wait(state string) <-chan struct{}
 	Stop()
 	start(Context)
 	dispatch(ctx context.Context, event Event) <-chan struct{}
@@ -1533,7 +1533,7 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 	return sm.process(ctx, event)
 }
 
-func (sm *hsm[T]) Wait(ctx context.Context, qualifiedName string) <-chan struct{} {
+func (sm *hsm[T]) Wait(qualifiedName string) <-chan struct{} {
 	if sm == nil {
 		return noevent.Done
 	}
@@ -1551,11 +1551,6 @@ func (sm *hsm[T]) Wait(ctx context.Context, qualifiedName string) <-chan struct{
 		sm.waiting[qualifiedName] = waiting
 	}
 	waiting.Store(done, struct{}{})
-	go func(waiting *sync.Map) {
-		<-ctx.Done()
-		close(done)
-		waiting.Delete(done)
-	}(waiting)
 	return done
 }
 
@@ -1663,7 +1658,7 @@ func done(channel chan struct{}) <-chan struct{} {
 
 func Wait(ctx context.Context, qualifiedName string) <-chan struct{} {
 	if hsm, ok := FromContext(ctx); ok {
-		return hsm.Wait(ctx, qualifiedName)
+		return hsm.Wait(qualifiedName)
 	}
 	return noevent.Done
 }
