@@ -367,6 +367,11 @@ func TestHSM(t *testing.T) {
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
+	// if !trace.matches(Trace{
+	// 	sync: []string{"s11.J.transition.effect"},
+	// }) {
+	// 	t.Fatal("transition actions are not correct", "trace", trace)
+	// }
 	trace.reset()
 	<-sm.Dispatch(hsm.Event{
 		Name: "K.P.A",

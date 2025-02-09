@@ -41,6 +41,8 @@ func Kind(id uint64, bases ...uint64) uint64 {
 }
 
 // IsBase checks if 'typeVal' matches any or all bases provided.
+//
+//go:inline
 func IsKind(kind uint64, bases ...uint64) bool {
 	for _, base := range bases {
 		baseId := base & idMask

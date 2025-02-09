@@ -219,7 +219,7 @@ func (q *queue) pop() (Event, bool) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 	if len(q.events) == 0 {
-		return Event{}, false
+		return noevent, false
 	}
 	event := q.events[0]
 	q.events = q.events[1:]
@@ -1017,7 +1017,7 @@ type Context interface {
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(event Event) <-chan struct{}
 	dispatch(ctx context.Context, event Event) <-chan struct{}
-	stop()
+	Stop()
 	start(Context)
 }
 
@@ -1056,14 +1056,20 @@ func (hsm HSM) State() string {
 	return hsm.Context.State()
 }
 
-func (hsm HSM) stop() {
+func (hsm HSM) Stop() {
 	if hsm.Context == nil {
 		return
 	}
-	hsm.Context.stop()
+	hsm.Context.Stop()
 }
 
 type subcontext = context.Context
+
+type active struct {
+	subcontext
+	cancel  context.CancelFunc
+	channel chan struct{}
+}
 
 type hsm[T Context] struct {
 	subcontext
@@ -1075,13 +1081,6 @@ type hsm[T Context] struct {
 	processing atomic.Bool
 	context    T
 	trace      Trace
-	event      chan Event
-}
-
-type active struct {
-	subcontext
-	cancel  context.CancelFunc
-	channel chan struct{}
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1132,7 +1131,6 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
-		event:   make(chan Event),
 	}
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
@@ -1174,7 +1172,7 @@ func (sm *hsm[T]) Dispatch(event Event) <-chan struct{} {
 	return sm.dispatch(sm.subcontext, event)
 }
 
-func (sm *hsm[T]) stop() {
+func (sm *hsm[T]) Stop() {
 	if sm == nil {
 		return
 	}
@@ -1208,9 +1206,11 @@ func (sm *hsm[T]) stop() {
 //	// ... use state machine ...
 //	hsm.Stop(sm)
 func Stop(ctx context.Context) {
-	if hsm, ok := FromContext(ctx); ok {
-		hsm.stop()
+	hsm, ok := FromContext(ctx)
+	if !ok {
+		return
 	}
+	hsm.Stop()
 }
 
 func (sm *hsm[T]) activate(ctx context.Context, id string) *active {
@@ -1277,7 +1277,8 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 		}
 		return sm.initial(ctx, element, event)
 	case kind.Choice:
-		for _, qualifiedName := range element.(*vertex).transitions {
+		vertex := element.(*vertex)
+		for _, qualifiedName := range vertex.transitions {
 			if transition := get[*transition](sm.model, qualifiedName); transition != nil {
 				if constraint := get[*constraint[T]](sm.model, transition.Guard()); constraint != nil {
 					if !sm.evaluate(ctx, constraint, event) {
@@ -1515,7 +1516,7 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 	}
 	if sm.trace != nil {
 		var end func(...any)
-		_, end = sm.trace(ctx, "Dispatch", event)
+		_, end = sm.trace(ctx, "dispatch", event)
 		defer end()
 	}
 	if sm.processing.Load() {
