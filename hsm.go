@@ -1551,14 +1551,16 @@ func (sm *hsm[T]) Wait(qualifiedName string) <-chan struct{} {
 	if sm == nil {
 		return noevent.Done
 	}
+	done := make(chan struct{}, 1)
 	if sm.state.QualifiedName() == qualifiedName {
-		return noevent.Done
+		done <- struct{}{}
+		return done
 	}
 	state, ok := sm.model.namespace[qualifiedName]
 	if !ok || !isKind(state, kind.State) {
-		return noevent.Done
+		close(done)
+		return done
 	}
-	done := make(chan struct{})
 	waiting, ok := sm.waiting[qualifiedName]
 	if !ok {
 		waiting = &sync.Map{}
