@@ -1026,7 +1026,7 @@ type Context interface {
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(event Event) <-chan struct{}
-	Wait(ctx context.Context, state string) error
+	Wait(ctx context.Context, state string) <-chan struct{}
 	Stop()
 	start(Context)
 	dispatch(ctx context.Context, event Event) <-chan struct{}
@@ -1085,7 +1085,7 @@ type hsm[T Context] struct {
 	processing atomic.Bool
 	context    T
 	trace      Trace
-	waiting    map[string][]chan struct{}
+	waiting    map[string]*sync.Map
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1136,7 +1136,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
-		waiting: map[string][]chan struct{}{},
+		waiting: map[string]*sync.Map{},
 	}
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
@@ -1533,37 +1533,42 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 	return sm.process(ctx, event)
 }
 
-func (sm *hsm[T]) Wait(ctx context.Context, qualifiedName string) error {
+func (sm *hsm[T]) Wait(ctx context.Context, qualifiedName string) <-chan struct{} {
 	if sm == nil {
-		return ErrNilHSM
+		return noevent.Done
 	}
 	if sm.state.QualifiedName() == qualifiedName {
-		return nil
+		return noevent.Done
 	}
 	state, ok := sm.model.namespace[qualifiedName]
 	if !ok || !isKind(state, kind.State) {
-		return ErrInvalidState
+		return noevent.Done
 	}
 	done := make(chan struct{})
-	sm.waiting[qualifiedName] = append(sm.waiting[qualifiedName], done)
-	select {
-	case <-ctx.Done():
-		close(done)
-		return ctx.Err()
-	case <-done:
+	waiting, ok := sm.waiting[qualifiedName]
+	if !ok {
+		waiting = &sync.Map{}
+		sm.waiting[qualifiedName] = waiting
 	}
-	return nil
+	waiting.Store(done, struct{}{})
+	go func(waiting *sync.Map) {
+		<-ctx.Done()
+		close(done)
+		waiting.Delete(done)
+	}(waiting)
+	return done
 }
 
 func (sm *hsm[T]) notify(state string) {
-	if waiting, ok := sm.waiting[state]; ok {
-		for _, done := range waiting {
+	if waiting, ok := sm.waiting[state]; ok && waiting != nil {
+		waiting.Range(func(key, value any) bool {
+			done := key.(chan struct{})
 			select {
 			case done <- struct{}{}:
 			default:
 			}
-		}
-		delete(sm.waiting, state)
+			return true
+		})
 	}
 }
 
@@ -1656,9 +1661,9 @@ func done(channel chan struct{}) <-chan struct{} {
 	return channel
 }
 
-func Wait(ctx context.Context, qualifiedName string) error {
+func Wait(ctx context.Context, qualifiedName string) <-chan struct{} {
 	if hsm, ok := FromContext(ctx); ok {
 		return hsm.Wait(ctx, qualifiedName)
 	}
-	return ErrMissingHSM
+	return noevent.Done
 }
