@@ -1069,14 +1069,14 @@ func (hsm HSM) Stop() {
 
 func (hsm HSM) Dispatch(event Event) <-chan struct{} {
 	if hsm.Context == nil {
-		return nil
+		return noevent.Done
 	}
 	return hsm.Context.Dispatch(event)
 }
 
 func (hsm HSM) Wait(state string) <-chan struct{} {
 	if hsm.Context == nil {
-		return nil
+		return noevent.Done
 	}
 	return hsm.Context.Wait(state)
 }
