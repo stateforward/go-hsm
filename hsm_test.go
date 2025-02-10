@@ -147,7 +147,7 @@ func TestHSM(t *testing.T) {
 			},
 		)),
 		hsm.Transition(hsm.After(
-			func(ctx context.Context, hsm *THSM) time.Duration {
+			func(ctx context.Context, hsm *THSM, event hsm.Event) time.Duration {
 				return time.Second * 2
 			},
 			"s211.after",

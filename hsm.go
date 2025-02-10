@@ -970,13 +970,13 @@ func Trigger[T interface{ string | *Event | Event }](events ...T) RedefinableEle
 // Example:
 //
 //	hsm.Transition(
-//	    hsm.After(func(ctx context.Context, hsm *MyHSM) time.Duration {
+//	    hsm.After(func(ctx context.Context, hsm *MyHSM, event Event) time.Duration {
 //	        return time.Second * 30
 //	    }),
 //	    hsm.Source("active"),
 //	    hsm.Target("timeout")
 //	)
-func After[T Context](expr func(ctx context.Context, hsm T) time.Duration, maybeName ...string) RedefinableElement {
+func After[T Context](expr func(ctx context.Context, hsm T, event Event) time.Duration, maybeName ...string) RedefinableElement {
 	name := ".after"
 	if len(maybeName) > 0 {
 		name = maybeName[0]
@@ -1271,9 +1271,10 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 					case kind.TimeEvent:
 						ctx := sm.activate(ctx, event.Id)
 						go func(ctx *active, event Event) {
-							duration := event.Data.(func(ctx context.Context, hsm T) time.Duration)(
+							duration := event.Data.(func(ctx context.Context, hsm T, event Event) time.Duration)(
 								ctx,
 								sm.context,
+								event,
 							)
 							timer := time.NewTimer(duration)
 							defer timer.Stop()

@@ -1,5 +1,5 @@
 {
     "go.testFlags": [
-        "-v"
+        "-v", "-count=1"
     ],
 }
