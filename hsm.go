@@ -133,6 +133,7 @@ func (vertex *vertex) Transitions() []string {
 
 type state struct {
 	vertex
+	initial  string
 	entry    string
 	exit     string
 	activity string
@@ -206,6 +207,21 @@ type constraint[T Context] struct {
 // Event represents a trigger that can cause state transitions in the state machine.
 // Events can carry data and have completion tracking through the Done channel.
 type Event = elements.Event
+
+var InitialEvent = Event{}
+
+type DecodedEvent[T any] struct {
+	Event
+	Data T
+}
+
+func DecodeEvent[T any](event Event) (DecodedEvent[T], bool) {
+	data, ok := event.Data.(T)
+	return DecodedEvent[T]{
+		Event: event,
+		Data:  data,
+	}, ok
+}
 
 var noevent = Event{
 	Done: func() chan struct{} {
@@ -281,11 +297,15 @@ func Define[T interface{ RedefinableElement | string }](nameOrRedifinableElement
 		elements:  redifinableElements,
 	}
 
-	stack := []elements.NamedElement{&model}
+	stack := []elements.NamedElement{&model.state}
 	for len(model.elements) > 0 {
 		elements := model.elements
 		model.elements = []RedefinableElement{}
 		apply(&model, stack, elements...)
+	}
+
+	if model.initial == "" {
+		panic(fmt.Errorf("initial state not found for model %s", model.Id()))
 	}
 	return model
 }
@@ -743,17 +763,18 @@ func Initial[T interface{ string | RedefinableElement }](elementOrName T, partia
 		initial := &vertex{
 			element: element{kind: kind.Initial, qualifiedName: path.Join(owner.QualifiedName(), name)},
 		}
+		owner.(*state).initial = initial.QualifiedName()
 		if model.namespace[initial.QualifiedName()] != nil {
 			traceback(fmt.Errorf("initial \"%s\" state already exists for \"%s\"", initial.QualifiedName(), owner.QualifiedName()))
 		}
 		model.namespace[initial.QualifiedName()] = initial
 		stack = append(stack, initial)
-		transition := (Transition(Source(initial.QualifiedName()), partialElements...)(model, stack)).(*transition)
+		transition := (Transition(Source(initial.QualifiedName()), append(partialElements, Trigger(InitialEvent))...)(model, stack)).(*transition)
 		// validation logic
 		if transition.guard != "" {
 			traceback(fmt.Errorf("initial \"%s\" cannot have a guard", initial.QualifiedName()))
 		}
-		if len(transition.events) > 0 {
+		if transition.events[0].Name != "" {
 			traceback(fmt.Errorf("initial \"%s\" cannot have triggers", initial.QualifiedName()))
 		}
 		if !strings.HasPrefix(transition.target, owner.QualifiedName()) {
@@ -1086,7 +1107,7 @@ type subcontext = context.Context
 type active struct {
 	subcontext
 	cancel  context.CancelFunc
-	channel chan struct{}
+	channel chan bool
 }
 
 type hsm[T Context] struct {
@@ -1167,8 +1188,8 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	all.Store(hsm.id, hsm)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
 		hsm.processing.Store(true)
-		defer hsm.processing.Store(false)
-		hsm.state = hsm.initial(hsm.subcontext, &model.state, event)
+		hsm.state = hsm.initial(ctx, &hsm.model.state, event)
+		hsm.process(ctx, event)
 	}
 	sm.start(hsm)
 	return sm
@@ -1199,7 +1220,7 @@ func (sm *hsm[T]) Stop() {
 	ctx := sm.subcontext
 	if sm.trace != nil {
 		var end func(...any)
-		ctx, end = sm.trace(ctx, "Terminate", sm.state)
+		ctx, end = sm.trace(ctx, "stop", sm.state)
 		defer end()
 	}
 	var ok bool
@@ -1237,7 +1258,7 @@ func (sm *hsm[T]) activate(ctx context.Context, id string) *active {
 	current, ok := sm.active[id]
 	if !ok {
 		current = &active{
-			channel: make(chan struct{}, 1),
+			channel: make(chan bool, 1),
 		}
 		sm.active[id] = current
 	}
@@ -1296,7 +1317,7 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 		if !defaultEntry {
 			return element
 		}
-		return sm.initial(ctx, element, event)
+		return sm.initial(ctx, state, event)
 	case kind.Choice:
 		vertex := element.(*vertex)
 		for _, qualifiedName := range vertex.transitions {
@@ -1313,29 +1334,24 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 	return nil
 }
 
-func (sm *hsm[T]) initial(ctx context.Context, element elements.NamedElement, event Event) elements.NamedElement {
-	if sm == nil || element == nil {
+func (sm *hsm[T]) initial(ctx context.Context, state *state, event Event) elements.NamedElement {
+	if sm == nil || state == nil {
 		return nil
 	}
 	if sm.trace != nil {
 		var end func(...any)
-		ctx, end = sm.trace(sm, "initial", element)
+		ctx, end = sm.trace(sm, "initial", state)
 		defer end()
 	}
-	var qualifiedName string
-	if element.QualifiedName() == "/" {
-		qualifiedName = "/.initial"
-	} else {
-		qualifiedName = element.QualifiedName() + "/.initial"
-	}
-	if initial := get[*vertex](sm.model, qualifiedName); initial != nil {
+
+	if initial := get[*vertex](sm.model, state.initial); initial != nil {
 		if len(initial.transitions) > 0 {
 			if transition := get[*transition](sm.model, initial.transitions[0]); transition != nil {
-				return sm.transition(ctx, element, transition, event)
+				return sm.transition(ctx, state, transition, event)
 			}
 		}
 	}
-	return element
+	return state
 }
 
 func (sm *hsm[T]) exit(ctx context.Context, element elements.NamedElement, event Event) {
@@ -1389,7 +1405,7 @@ func (sm *hsm[T]) execute(ctx context.Context, element *behavior[T], event Event
 				defer end()
 			}
 			element.method(ctx, sm.context, event)
-			ctx.channel <- struct{}{}
+			ctx.channel <- true
 		}(ctx, end)
 	default:
 		element.method(ctx, sm.context, event)
@@ -1499,9 +1515,6 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 }
 
 func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
-	if sm.processing.Load() {
-		return noevent.Done
-	}
 	sm.processing.Store(true)
 	defer sm.processing.Store(false)
 	var results <-chan struct{} = event.Done
@@ -1538,7 +1551,7 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 	}
 	if sm.trace != nil {
 		var end func(...any)
-		_, end = sm.trace(ctx, "dispatch", event)
+		ctx, end = sm.trace(ctx, "dispatch", event)
 		defer end()
 	}
 	if sm.processing.Load() {
