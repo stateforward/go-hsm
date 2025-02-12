@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"path"
 	"regexp"
 	"runtime"
@@ -1010,8 +1011,10 @@ func After[T Context](expr func(ctx context.Context, hsm T, event Event) time.Du
 			traceback(fmt.Errorf("after must be called within a Transition"))
 		}
 		qualifiedName := path.Join(owner.QualifiedName(), strconv.Itoa(len(owner.(*transition).events)), name)
+		hash := crc32.ChecksumIEEE([]byte(qualifiedName))
 		owner.(*transition).events = append(owner.(*transition).events, Event{
 			Kind: kind.TimeEvent,
+			Id:   strconv.FormatUint(uint64(hash), 32),
 			Name: qualifiedName,
 			Data: expr,
 		})
