@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1046,11 +1047,10 @@ type Context interface {
 	// State returns the current state's qualified name.
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
-	Dispatch(event Event) <-chan struct{}
+	Dispatch(ctx context.Context, event Event) <-chan struct{}
 	Wait(state string) <-chan struct{}
 	Stop()
 	start(Context)
-	dispatch(ctx context.Context, event Event) <-chan struct{}
 }
 
 // HSM is the base type that should be embedded in custom state machine types.
@@ -1088,11 +1088,12 @@ func (hsm HSM) Stop() {
 	hsm.Context.Stop()
 }
 
-func (hsm HSM) Dispatch(event Event) <-chan struct{} {
+func (hsm HSM) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if hsm.Context == nil {
 		return noevent.Done
 	}
-	return hsm.Context.Dispatch(event)
+
+	return hsm.Context.Dispatch(ctx, event)
 }
 
 func (hsm HSM) Wait(state string) <-chan struct{} {
@@ -1120,7 +1121,7 @@ type hsm[T Context] struct {
 	processing atomic.Bool
 	context    T
 	trace      Trace
-	waiting    map[string]*sync.Map
+	waiting    *sync.Map
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1171,7 +1172,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		active:  map[string]*active{},
 		context: sm,
 		queue:   queue{},
-		waiting: map[string]*sync.Map{},
+		waiting: &sync.Map{},
 	}
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
@@ -1207,10 +1208,6 @@ func (sm *hsm[T]) State() string {
 
 func (sm *hsm[T]) start(active Context) {
 	sm.execute(sm.subcontext, &sm.behavior, noevent)
-}
-
-func (sm *hsm[T]) Dispatch(event Event) <-chan struct{} {
-	return sm.dispatch(sm.subcontext, event)
 }
 
 func (sm *hsm[T]) Stop() {
@@ -1255,6 +1252,9 @@ func Stop(ctx context.Context) {
 }
 
 func (sm *hsm[T]) activate(ctx context.Context, id string) *active {
+	if id == "" {
+		return nil
+	}
 	current, ok := sm.active[id]
 	if !ok {
 		current = &active{
@@ -1306,7 +1306,7 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 								break
 							case <-timer.C:
 								timer.Stop()
-								sm.dispatch(ctx, event)
+								sm.Dispatch(ctx, event)
 								return
 							}
 						}(ctx, event)
@@ -1314,8 +1314,9 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 				}
 			}
 		}
+		sm.notify(state.QualifiedName())
 		if !defaultEntry {
-			return element
+			return state
 		}
 		return sm.initial(ctx, state, event)
 	case kind.Choice:
@@ -1528,7 +1529,6 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 			}
 			if transition := sm.enabled(ctx, source, event); transition != nil {
 				sm.state = sm.transition(ctx, sm.state, transition, event)
-				sm.notify(sm.state.QualifiedName())
 				break
 			}
 			qualifiedName = source.Owner()
@@ -1539,7 +1539,7 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 	return results
 }
 
-func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
+func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if sm == nil {
 		return done(event.Done)
 	}
@@ -1558,43 +1558,55 @@ func (sm *hsm[T]) dispatch(ctx context.Context, event Event) <-chan struct{} {
 		sm.queue.push(event)
 		return event.Done
 	}
+	if _, ok := any(ctx).(*active); ok {
+		// we are dispatching from an active context, so we need to process this in a go routine to prevent deadlocks during termination
+		go sm.process(ctx, event)
+		return event.Done
+	}
 	return sm.process(ctx, event)
 }
 
-func (sm *hsm[T]) Wait(qualifiedName string) <-chan struct{} {
+func wildcard(pattern string) string {
+	pattern = strings.ReplaceAll(pattern, ".", `\.`)    // Escape dots
+	pattern = strings.ReplaceAll(pattern, "**", ".*")   // Convert ** to match anything
+	pattern = strings.ReplaceAll(pattern, "*", "[^/]*") // Convert * to match within a section
+	return "^" + pattern + "$"                          // Anchor to match the full string
+}
+
+func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 	if sm == nil {
 		return noevent.Done
 	}
 	done := make(chan struct{}, 1)
-	if sm.state.QualifiedName() == qualifiedName {
+	regex, err := regexp.Compile(wildcard(pattern))
+	if err != nil {
+		close(done)
+		return done
+	}
+	if regex.MatchString(sm.state.QualifiedName()) {
 		done <- struct{}{}
 		return done
 	}
-	state, ok := sm.model.namespace[qualifiedName]
+	state, ok := sm.model.namespace[pattern]
 	if !ok || !isKind(state, kind.State) {
 		close(done)
 		return done
 	}
-	waiting, ok := sm.waiting[qualifiedName]
-	if !ok {
-		waiting = &sync.Map{}
-		sm.waiting[qualifiedName] = waiting
-	}
-	waiting.Store(done, struct{}{})
+	sm.waiting.Store(done, regex)
 	return done
 }
 
 func (sm *hsm[T]) notify(state string) {
-	if waiting, ok := sm.waiting[state]; ok && waiting != nil {
-		waiting.Range(func(key, value any) bool {
-			done := key.(chan struct{})
+	sm.waiting.Range(func(channel, regex any) bool {
+		if regex.(*regexp.Regexp).MatchString(state) {
+			done := channel.(chan struct{})
 			select {
 			case done <- struct{}{}:
 			default:
 			}
-			return true
-		})
-	}
+		}
+		return true
+	})
 }
 
 // Dispatch sends an event to a specific state machine instance.
@@ -1607,7 +1619,7 @@ func (sm *hsm[T]) notify(state string) {
 //	<-done // Wait for event processing to complete
 func Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if hsm, ok := FromContext(ctx); ok {
-		return hsm.dispatch(ctx, event)
+		return hsm.Dispatch(ctx, event)
 	}
 	return done(event.Done)
 }
@@ -1631,7 +1643,7 @@ func DispatchAll(ctx context.Context, event Event) <-chan struct{} {
 		if !ok {
 			return true
 		}
-		maybeSM.dispatch(ctx, event)
+		maybeSM.Dispatch(ctx, event)
 		return true
 	})
 	return event.Done
@@ -1650,7 +1662,7 @@ func DispatchTo(ctx context.Context, id string, event Event) <-chan struct{} {
 	if !ok {
 		return done(event.Done)
 	}
-	return maybeSM.dispatch(ctx, event)
+	return maybeSM.Dispatch(ctx, event)
 }
 
 // FromContext retrieves a state machine instance from a context.
