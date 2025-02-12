@@ -1119,7 +1119,7 @@ type hsm[T Context] struct {
 	behavior[T]
 	state      elements.NamedElement
 	model      *Model
-	active     map[string]*active
+	active     map[any]*active
 	queue      queue
 	processing atomic.Bool
 	context    T
@@ -1172,7 +1172,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 			},
 		},
 		model:   model,
-		active:  map[string]*active{},
+		active:  map[any]*active{},
 		context: sm,
 		queue:   queue{},
 		waiting: &sync.Map{},
@@ -1254,18 +1254,18 @@ func Stop(ctx context.Context) {
 	hsm.Stop()
 }
 
-func (sm *hsm[T]) activate(ctx context.Context, id string) *active {
-	if id == "" {
+func (sm *hsm[T]) activate(ctx context.Context, key any) *active {
+	if key == nil {
 		return nil
 	}
-	current, ok := sm.active[id]
+	current, ok := sm.active[key]
 	if !ok {
 		current = &active{
 			channel: make(chan bool, 1),
 		}
-		sm.active[id] = current
+		sm.active[key] = current
 	}
-	current.subcontext, current.cancel = context.WithCancel(ctx)
+	current.subcontext, current.cancel = context.WithCancel(context.WithValue(ctx, &sm.active, key))
 	return current
 }
 
@@ -1561,10 +1561,11 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		sm.queue.push(event)
 		return event.Done
 	}
-	if _, ok := any(ctx).(*active); ok {
-		// we are dispatching from an active context, so we need to process this in a go routine to prevent deadlocks during termination
-		go sm.process(ctx, event)
-		return event.Done
+	if id := ctx.Value(&sm.active); id != nil {
+		if _, ok := sm.active[id]; ok {
+			go sm.process(ctx, event)
+			return event.Done
+		}
 	}
 	return sm.process(ctx, event)
 }
