@@ -128,6 +128,7 @@ func TestHSM(t *testing.T) {
 			),
 			hsm.Transition(hsm.Trigger(`*.P.*`), hsm.Effect(mockAction("s11.P.transition.effect", false))),
 		),
+		hsm.State("t"),
 		hsm.Initial(
 			hsm.Target(hsm.Choice(
 				"initial_choice",
@@ -181,8 +182,7 @@ func TestHSM(t *testing.T) {
 			})
 		})),
 		hsm.Transition(hsm.Trigger("K"), hsm.Source("/s/s1/s11"), hsm.Target("/s/s3"), hsm.Effect(mockAction("s11.K.transition.effect", false))),
-
-		// hsm.Transition(hsm.Source("/s/s3"), hsm.Target("/s"), hsm.Effect(mockAction("s3.completion.transition.effect", false))),
+		hsm.Transition(hsm.Trigger("Z"), hsm.Effect(mockAction("Z.transition.effect", false))),
 	)
 	sm := hsm.Start(ctx, &THSM{
 		foo: 0,
@@ -391,6 +391,15 @@ func TestHSM(t *testing.T) {
 	if !trace.contains(Trace{
 		sync: []string{"s11.P.transition.effect"},
 	}) {
+		t.Fatal("transition actions are not correct", "trace", trace)
+	}
+	trace.reset()
+	<-sm.Dispatch(ctx, hsm.Event{Name: "Z"})
+	if !trace.contains(
+		Trace{
+			sync: []string{"Z.transition.effect"},
+		},
+	) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()

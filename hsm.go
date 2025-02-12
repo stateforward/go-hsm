@@ -67,7 +67,7 @@ func (element *element) Kind() uint64 {
 }
 
 func (element *element) Owner() string {
-	if element == nil {
+	if element == nil || element.qualifiedName == "/" {
 		return ""
 	}
 	return path.Dir(element.qualifiedName)
@@ -295,10 +295,11 @@ func Define[T interface{ RedefinableElement | string }](nameOrRedifinableElement
 		state: state{
 			vertex: vertex{element: element{kind: kind.State, qualifiedName: "/", id: name}, transitions: []string{}},
 		},
-		namespace: map[string]elements.NamedElement{},
-		elements:  redifinableElements,
+		elements: redifinableElements,
 	}
-
+	model.namespace = map[string]elements.NamedElement{
+		"/": &model.state,
+	}
 	stack := []elements.NamedElement{&model.state}
 	for len(model.elements) > 0 {
 		elements := model.elements
@@ -1210,7 +1211,7 @@ func (sm *hsm[T]) State() string {
 }
 
 func (sm *hsm[T]) start(active Context) {
-	sm.execute(sm.subcontext, &sm.behavior, noevent)
+	sm.execute(sm.subcontext, &sm.behavior, InitialEvent)
 }
 
 func (sm *hsm[T]) Stop() {
@@ -1227,6 +1228,7 @@ func (sm *hsm[T]) Stop() {
 	for sm.state != nil {
 		sm.exit(ctx, sm.state, noevent)
 		sm.state, ok = sm.model.namespace[sm.state.Owner()]
+
 		if !ok {
 			break
 		}
@@ -1525,7 +1527,7 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 	ok := true
 	for ok {
 		qualifiedName := sm.state.QualifiedName()
-		for qualifiedName != "/" {
+		for qualifiedName != "" {
 			source := get[elements.Vertex](sm.model, qualifiedName)
 			if source == nil {
 				break
