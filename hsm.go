@@ -1571,11 +1571,14 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	return sm.process(ctx, event)
 }
 
-func wildcard(pattern string) string {
-	pattern = strings.ReplaceAll(pattern, ".", `\.`)    // Escape dots
-	pattern = strings.ReplaceAll(pattern, "**", ".*")   // Convert ** to match anything
-	pattern = strings.ReplaceAll(pattern, "*", "[^/]*") // Convert * to match within a section
-	return "^" + pattern + "$"                          // Anchor to match the full string
+func wildcard(pattern string) (string, bool) {
+	pattern = strings.ReplaceAll(pattern, ".", `\.`) // Escape dots
+	isWildcard := strings.Contains(pattern, "*")
+	if isWildcard {
+		pattern = strings.ReplaceAll(pattern, "**", ".*")   // Convert ** to match anything
+		pattern = strings.ReplaceAll(pattern, "*", "[^/]*") // Convert * to match within a section
+	}
+	return "^" + pattern + "$", isWildcard
 }
 
 func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
@@ -1583,7 +1586,8 @@ func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 		return noevent.Done
 	}
 	done := make(chan struct{}, 1)
-	regex, err := regexp.Compile(wildcard(pattern))
+	wildcard, isWildcard := wildcard(pattern)
+	regex, err := regexp.Compile(wildcard)
 	if err != nil {
 		close(done)
 		return done
@@ -1592,7 +1596,19 @@ func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 		done <- struct{}{}
 		return done
 	}
-	state, ok := sm.model.namespace[pattern]
+	var state elements.NamedElement
+	var ok bool
+	if isWildcard {
+		for key, element := range sm.model.namespace {
+			if isKind(element, kind.State) && regex.MatchString(key) {
+				state = element
+				ok = true
+				break
+			}
+		}
+	} else {
+		state, ok = sm.model.namespace[pattern]
+	}
 	if !ok || !isKind(state, kind.State) {
 		close(done)
 		return done
