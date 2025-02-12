@@ -1563,6 +1563,7 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	}
 	if id := ctx.Value(&sm.active); id != nil {
 		if _, ok := sm.active[id]; ok {
+			sm.processing.Store(true)
 			go sm.process(ctx, event)
 			return event.Done
 		}
