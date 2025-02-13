@@ -534,10 +534,10 @@ var benchModel = hsm.Define(
 	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
-var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
+
+// var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
 
 func BenchmarkHSM(b *testing.B) {
-	b.ReportAllocs()
 	ctx := context.Background()
 	fooEvent := hsm.Event{
 		Name: "foo",
@@ -547,19 +547,15 @@ func BenchmarkHSM(b *testing.B) {
 		Name: "bar",
 		// Done: make(chan struct{}),
 	}
-	benchSM = hsm.Start(ctx, &THSM{}, &benchModel)
+	benchSM := hsm.Start(ctx, &THSM{}, &benchModel)
+	b.ReportAllocs()
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		benchSM.Dispatch(ctx, fooEvent)
-		// if benchSM.State() != "/bar" {
-		// 	b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
-		// }
 		benchSM.Dispatch(ctx, barEvent)
-		// if benchSM.State() != "/foo" {
-		// 	b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
-		// }
 	}
-	// <-benchSM.Stop(ctx)
+	<-benchSM.Stop(ctx)
 }
 
 func nonHSMLogic() func(event *hsm.Event) bool {

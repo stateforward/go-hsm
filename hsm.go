@@ -7,7 +7,6 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"path"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1138,11 +1137,12 @@ type hsm[T Context] struct {
 	model      *Model
 	active     map[any]*active
 	queue      queue
-	processing atomic.Bool
 	context    T
 	trace      Trace
 	waiting    *sync.Map
 	timeouts   timeouts
+	processing sync.Mutex
+	mutex      sync.RWMutex
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1168,6 +1168,90 @@ var Keys = struct {
 }{
 	All: key[*sync.Map]{},
 	HSM: key[HSM]{},
+}
+
+func match(pattern, s string) bool {
+	var lastErotemeCluster byte
+	var patternIndex, sIndex, lastStar, lastEroteme int
+	patternLen := len(pattern)
+	sLen := len(s)
+	star := -1
+	eroteme := -1
+
+Loop:
+	if sIndex >= sLen {
+		goto checkPattern
+	}
+
+	if patternIndex >= patternLen {
+		if star != -1 {
+			patternIndex = star + 1
+			lastStar++
+			sIndex = lastStar
+			goto Loop
+		}
+		return false
+	}
+	switch pattern[patternIndex] {
+	case '.':
+		// It matches any single character. So, we don't need to check anything.
+	case '?':
+		// '?' matches one character. Store its position and match exactly one character in the string.
+		eroteme = patternIndex
+		lastEroteme = sIndex
+		lastErotemeCluster = byte(s[sIndex])
+	case '*':
+		// '*' matches zero or more characters. Store its position and increment the pattern index.
+		star = patternIndex
+		lastStar = sIndex
+		patternIndex++
+		goto Loop
+	default:
+		// If the characters don't match, check if there was a previous '?' or '*' to backtrack.
+		if pattern[patternIndex] != s[sIndex] {
+			if eroteme != -1 {
+				patternIndex = eroteme + 1
+				sIndex = lastEroteme
+				eroteme = -1
+				goto Loop
+			}
+
+			if star != -1 {
+				patternIndex = star + 1
+				lastStar++
+				sIndex = lastStar
+				goto Loop
+			}
+
+			return false
+		}
+
+		// If the characters match, check if it was not the same to validate the eroteme.
+		if eroteme != -1 && lastErotemeCluster != byte(s[sIndex]) {
+			eroteme = -1
+		}
+	}
+
+	patternIndex++
+	sIndex++
+	goto Loop
+
+	// Check if the remaining pattern characters are '*' or '?', which can match the end of the string.
+checkPattern:
+	if patternIndex < patternLen {
+		if pattern[patternIndex] == '*' {
+			patternIndex++
+			goto checkPattern
+		} else if pattern[patternIndex] == '?' {
+			if sIndex >= sLen {
+				sIndex--
+			}
+			patternIndex++
+			goto checkPattern
+		}
+	}
+
+	return patternIndex == patternLen
 }
 
 // Start creates and starts a new state machine instance with the given model and configuration.
@@ -1197,6 +1281,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		queue:   queue{},
 		waiting: &sync.Map{},
 	}
+	hsm.processing.Lock()
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
 		hsm.id = config[0].Id
@@ -1215,9 +1300,8 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	hsm.subcontext = context.WithValue(context.WithValue(context.Background(), Keys.All, all), Keys.HSM, hsm)
 	all.Store(hsm.id, hsm)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
-		hsm.processing.Store(true)
 		hsm.state = hsm.initial(ctx, &hsm.model.state, event)
-		hsm.process(ctx)
+		hsm.process(ctx, noevent)
 	}
 	sm.start(hsm)
 	return sm
@@ -1227,6 +1311,8 @@ func (sm *hsm[T]) State() string {
 	if sm == nil {
 		return ""
 	}
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
 	if sm.state == nil {
 		return ""
 	}
@@ -1247,10 +1333,9 @@ func (sm *hsm[T]) Stop(ctx context.Context) <-chan struct{} {
 		defer end()
 	}
 	done := make(chan struct{})
+	sm.processing.Lock()
 	go func() {
 		var ok bool
-		<-sm.Dispatch(ctx, noevent.WithDone(make(chan struct{})))
-		sm.processing.Store(true)
 		for sm.state != nil {
 			sm.exit(ctx, sm.state, noevent)
 			sm.state, ok = sm.model.namespace[sm.state.Owner()]
@@ -1259,6 +1344,7 @@ func (sm *hsm[T]) Stop(ctx context.Context) <-chan struct{} {
 			}
 		}
 		close(done)
+		sm.processing.Unlock()
 	}()
 	if all, ok := sm.Value(Keys.All).(*sync.Map); ok {
 		all.Delete(sm.id)
@@ -1550,10 +1636,8 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 	return nil
 }
 
-func (sm *hsm[T]) process(ctx context.Context) {
-	sm.processing.Store(true)
-	defer sm.processing.Store(false)
-	event, ok := sm.queue.pop()
+func (sm *hsm[T]) process(ctx context.Context, event Event) {
+	ok := true
 	for ok {
 		qualifiedName := sm.state.QualifiedName()
 		for qualifiedName != "" {
@@ -1562,7 +1646,9 @@ func (sm *hsm[T]) process(ctx context.Context) {
 				break
 			}
 			if transition := sm.enabled(ctx, source, event); transition != nil {
+				sm.mutex.Lock()
 				sm.state = sm.transition(ctx, sm.state, transition, event)
+				sm.mutex.Unlock()
 				break
 			}
 			qualifiedName = source.Owner()
@@ -1570,6 +1656,7 @@ func (sm *hsm[T]) process(ctx context.Context) {
 		done(event.Done)
 		event, ok = sm.queue.pop()
 	}
+	sm.processing.Unlock()
 }
 
 func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
@@ -1590,23 +1677,12 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		ctx, end = sm.trace(ctx, "dispatch", event)
 		defer end()
 	}
-	if sm.queue.len() > 0 {
-		sm.queue.push(event)
+	if sm.processing.TryLock() {
+		go sm.process(ctx, event)
 		return event.Done
 	}
 	sm.queue.push(event)
-	go sm.process(ctx)
 	return event.Done
-}
-
-func wildcard(pattern string) (string, bool) {
-	pattern = strings.ReplaceAll(pattern, ".", `\.`) // Escape dots
-	isWildcard := strings.Contains(pattern, "*")
-	if isWildcard {
-		pattern = strings.ReplaceAll(pattern, "**", ".*")   // Convert ** to match anything
-		pattern = strings.ReplaceAll(pattern, "*", "[^/]*") // Convert * to match within a section
-	}
-	return "^" + pattern + "$", isWildcard
 }
 
 func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
@@ -1614,40 +1690,26 @@ func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 		return noevent.Done
 	}
 	done := make(chan struct{}, 1)
-	wildcard, isWildcard := wildcard(pattern)
-	regex, err := regexp.Compile(wildcard)
-	if err != nil {
-		close(done)
-		return done
-	}
-	if regex.MatchString(sm.state.QualifiedName()) {
+	sm.mutex.RLock()
+	currentState := sm.state.QualifiedName()
+	sm.mutex.RUnlock()
+	if match(pattern, currentState) {
 		done <- struct{}{}
 		return done
 	}
-	var state elements.NamedElement
-	var ok bool
-	if isWildcard {
-		for key, element := range sm.model.namespace {
-			if isKind(element, kind.State) && regex.MatchString(key) {
-				state = element
-				ok = true
-				break
-			}
+	for key, element := range sm.model.namespace {
+		if isKind(element, kind.State) && match(pattern, key) {
+			sm.waiting.Store(done, pattern)
+			return done
 		}
-	} else {
-		state, ok = sm.model.namespace[pattern]
 	}
-	if !ok || !isKind(state, kind.State) {
-		close(done)
-		return done
-	}
-	sm.waiting.Store(done, regex)
+	close(done)
 	return done
 }
 
 func (sm *hsm[T]) notify(state string) {
-	sm.waiting.Range(func(channel, regex any) bool {
-		if regex.(*regexp.Regexp).MatchString(state) {
+	sm.waiting.Range(func(channel, pattern any) bool {
+		if match(pattern.(string), state) {
 			done := channel.(chan struct{})
 			select {
 			case done <- struct{}{}:
