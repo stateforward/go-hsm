@@ -459,6 +459,7 @@ func TestDispatchTo(t *testing.T) {
 	}
 	<-hsm.DispatchTo(sm2, "sm2", hsm.Event{
 		Name: "foo",
+		Done: make(chan struct{}),
 	})
 	if sm2.State() != "/bar" {
 		t.Fatal("state is not correct", "state", sm2.State())

@@ -1346,7 +1346,7 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 			}
 		}
 		sm.notify(state.QualifiedName())
-		if !defaultEntry {
+		if !defaultEntry || state.initial == "" {
 			return state
 		}
 		return sm.initial(ctx, state, event)
@@ -1584,6 +1584,9 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	if event.Kind == 0 {
 		event.Kind = kind.Event
 	}
+	if event.Done == nil {
+		event.Done = closedChannel
+	}
 	if sm.trace != nil {
 		var end func(...any)
 		ctx, end = sm.trace(ctx, "dispatch", event)
@@ -1595,9 +1598,6 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	}
 	sm.processing.Store(true)
 	go sm.process(ctx, event)
-	if event.Done == nil {
-		return noevent.Done
-	}
 	return event.Done
 }
 
