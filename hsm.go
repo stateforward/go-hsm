@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"log/slog"
 	"path"
 	"regexp"
 	"runtime"
@@ -1193,6 +1194,9 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	if hsm.id == "" {
 		hsm.id = id()
 	}
+	if hsm.timeouts.terminate == 0 {
+		hsm.timeouts.terminate = time.Millisecond
+	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
 		all = &sync.Map{}
@@ -1504,6 +1508,7 @@ func (sm *hsm[T]) terminate(ctx context.Context, behavior elements.NamedElement)
 	case <-active.channel:
 		return
 	case <-time.After(sm.timeouts.terminate):
+		slog.Error("terminate timeout", "behavior", behavior.QualifiedName())
 		return
 	}
 
