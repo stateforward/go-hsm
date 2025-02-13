@@ -1115,6 +1115,10 @@ type active struct {
 	channel chan bool
 }
 
+type timeouts struct {
+	terminate time.Duration
+}
+
 type hsm[T Context] struct {
 	subcontext
 	behavior[T]
@@ -1126,6 +1130,7 @@ type hsm[T Context] struct {
 	context    T
 	trace      Trace
 	waiting    *sync.Map
+	timeouts   timeouts
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1139,6 +1144,8 @@ type Config struct {
 	Trace Trace
 	// Id is a unique identifier for the state machine instance.
 	Id string
+	// TerminateTimeout is the timeout for terminating the state machine.
+	TerminateTimeout time.Duration
 }
 
 type key[T any] struct{}
@@ -1181,6 +1188,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
 		hsm.id = config[0].Id
+		hsm.timeouts.terminate = config[0].TerminateTimeout
 	}
 	if hsm.id == "" {
 		hsm.id = id()
@@ -1492,7 +1500,12 @@ func (sm *hsm[T]) terminate(ctx context.Context, behavior elements.NamedElement)
 		return
 	}
 	active.cancel()
-	<-active.channel
+	select {
+	case <-active.channel:
+		return
+	case <-time.After(sm.timeouts.terminate):
+		return
+	}
 
 }
 
