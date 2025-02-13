@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"log/slog"
 	"path"
 	"regexp"
 	"runtime"
@@ -225,12 +226,14 @@ func DecodeEvent[T any](event Event) (DecodedEvent[T], bool) {
 	}, ok
 }
 
+var closedChannel = func() chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}()
+
 var noevent = Event{
-	Done: func() chan struct{} {
-		done := make(chan struct{})
-		close(done)
-		return done
-	}(),
+	Done: closedChannel,
 }
 
 type queue struct {
@@ -289,19 +292,19 @@ func apply(model *Model, stack []elements.NamedElement, partials ...RedefinableE
 //	    hsm.State("green"),
 //	    hsm.Initial("red")
 //	)
-func Define[T interface{ RedefinableElement | string }](nameOrRedifinableElement T, redifinableElements ...RedefinableElement) Model {
+func Define[T interface{ RedefinableElement | string }](nameOrRedefinableElement T, redefinableElements ...RedefinableElement) Model {
 	name := "/"
-	switch any(nameOrRedifinableElement).(type) {
+	switch any(nameOrRedefinableElement).(type) {
 	case string:
-		name = path.Join(name, any(nameOrRedifinableElement).(string))
+		name = path.Join(name, any(nameOrRedefinableElement).(string))
 	case RedefinableElement:
-		redifinableElements = append([]RedefinableElement{any(nameOrRedifinableElement).(RedefinableElement)}, redifinableElements...)
+		redefinableElements = append([]RedefinableElement{any(nameOrRedefinableElement).(RedefinableElement)}, redefinableElements...)
 	}
 	model := Model{
 		state: state{
 			vertex: vertex{element: element{kind: kind.State, qualifiedName: "/", id: name}, transitions: []string{}},
 		},
-		elements: redifinableElements,
+		elements: redefinableElements,
 	}
 	model.namespace = map[string]elements.NamedElement{
 		"/": &model.state,
@@ -564,8 +567,11 @@ func Transition[T interface{ RedefinableElement | string }](nameOrPartialElement
 						exit := []string{}
 						if transition.kind != kind.Internal {
 							exiting := element.QualifiedName()
-							for exiting != lca && exiting != "/" && exiting != "" {
+							for exiting != lca && exiting != "" {
 								exit = append(exit, exiting)
+								if exiting == "/" {
+									break
+								}
 								exiting = path.Dir(exiting)
 							}
 						}
@@ -1059,7 +1065,7 @@ type Context interface {
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(ctx context.Context, event Event) <-chan struct{}
 	Wait(state string) <-chan struct{}
-	Stop()
+	Stop(ctx context.Context) <-chan struct{}
 	start(Context)
 }
 
@@ -1091,11 +1097,11 @@ func (hsm HSM) State() string {
 	return hsm.Context.State()
 }
 
-func (hsm HSM) Stop() {
+func (hsm HSM) Stop(ctx context.Context) <-chan struct{} {
 	if hsm.Context == nil {
-		return
+		return noevent.Done
 	}
-	hsm.Context.Stop()
+	return hsm.Context.Stop(ctx)
 }
 
 func (hsm HSM) Dispatch(ctx context.Context, event Event) <-chan struct{} {
@@ -1121,6 +1127,10 @@ type active struct {
 	channel chan bool
 }
 
+type timeouts struct {
+	terminate time.Duration
+}
+
 type hsm[T Context] struct {
 	subcontext
 	behavior[T]
@@ -1132,6 +1142,7 @@ type hsm[T Context] struct {
 	context    T
 	trace      Trace
 	waiting    *sync.Map
+	timeouts   timeouts
 }
 
 // Trace is a function type for tracing state machine execution.
@@ -1145,6 +1156,8 @@ type Config struct {
 	Trace Trace
 	// Id is a unique identifier for the state machine instance.
 	Id string
+	// TerminateTimeout is the timeout for the state activity to terminate.
+	TerminateTimeout time.Duration
 }
 
 type key[T any] struct{}
@@ -1187,9 +1200,13 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	if len(config) > 0 {
 		hsm.trace = config[0].Trace
 		hsm.id = config[0].Id
+		hsm.timeouts.terminate = config[0].TerminateTimeout
 	}
 	if hsm.id == "" {
 		hsm.id = id()
+	}
+	if hsm.timeouts.terminate == 0 {
+		hsm.timeouts.terminate = time.Millisecond
 	}
 	all, ok := ctx.Value(Keys.All).(*sync.Map)
 	if !ok {
@@ -1220,30 +1237,33 @@ func (sm *hsm[T]) start(active Context) {
 	sm.execute(sm.subcontext, &sm.behavior, InitialEvent)
 }
 
-func (sm *hsm[T]) Stop() {
+func (sm *hsm[T]) Stop(ctx context.Context) <-chan struct{} {
 	if sm == nil {
-		return
+		return closedChannel
 	}
-	ctx := sm.subcontext
 	if sm.trace != nil {
 		var end func(...any)
 		ctx, end = sm.trace(ctx, "stop", sm.state)
 		defer end()
 	}
-	var ok bool
-	for sm.state != nil {
-		sm.exit(ctx, sm.state, noevent)
-		sm.state, ok = sm.model.namespace[sm.state.Owner()]
-
-		if !ok {
-			break
+	done := make(chan struct{})
+	go func() {
+		var ok bool
+		<-sm.Dispatch(ctx, noevent)
+		sm.processing.Store(true)
+		for sm.state != nil {
+			sm.exit(ctx, sm.state, noevent)
+			sm.state, ok = sm.model.namespace[sm.state.Owner()]
+			if !ok {
+				break
+			}
 		}
+		close(done)
+	}()
+	if all, ok := sm.Value(Keys.All).(*sync.Map); ok {
+		all.Delete(sm.id)
 	}
-	all, ok := sm.Value(Keys.All).(*sync.Map)
-	if !ok {
-		return
-	}
-	all.Delete(sm)
+	return done
 }
 
 // Stop gracefully stops a state machine instance.
@@ -1259,7 +1279,7 @@ func Stop(ctx context.Context) {
 	if !ok {
 		return
 	}
-	hsm.Stop()
+	hsm.Stop(ctx)
 }
 
 func (sm *hsm[T]) activate(ctx context.Context, key any) *active {
@@ -1498,7 +1518,11 @@ func (sm *hsm[T]) terminate(ctx context.Context, behavior elements.NamedElement)
 		return
 	}
 	active.cancel()
-	<-active.channel
+	select {
+	case <-active.channel:
+	case <-time.After(sm.timeouts.terminate):
+		slog.Error("terminate timeout", "behavior", behavior.QualifiedName())
+	}
 
 }
 

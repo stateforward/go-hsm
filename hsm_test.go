@@ -403,7 +403,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	hsm.Stop(sm)
+	<-sm.Stop(ctx)
 	if sm.State() != "" {
 		t.Fatal("state is not correct", "state", sm.State())
 	}
