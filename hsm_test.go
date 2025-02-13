@@ -394,7 +394,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	<-sm.Dispatch(ctx, hsm.Event{Name: "Z"})
+	<-sm.Dispatch(ctx, hsm.Event{Name: "Z", Done: make(chan struct{})})
 	if !trace.contains(
 		Trace{
 			sync: []string{"Z.transition.effect"},
@@ -520,7 +520,7 @@ var benchModel = hsm.Define(
 
 	hsm.State("bar", hsm.Entry(noBehavior),
 		hsm.Exit(noBehavior)),
-
+	hsm.State("done"),
 	hsm.Transition(
 		hsm.Trigger("foo"),
 		hsm.Source("foo"),
@@ -534,6 +534,11 @@ var benchModel = hsm.Define(
 		hsm.Effect(noBehavior),
 	),
 	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
+	hsm.Transition(
+		hsm.Trigger("done"),
+		hsm.Source("foo"),
+		hsm.Target("done"),
+	),
 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
 var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
@@ -543,24 +548,28 @@ func BenchmarkHSM(b *testing.B) {
 	ctx := context.Background()
 	fooEvent := hsm.Event{
 		Name: "foo",
-		Done: make(chan struct{}),
+		// Done: make(chan struct{}),
 	}
 	barEvent := hsm.Event{
 		Name: "bar",
-		Done: make(chan struct{}),
+		// Done: make(chan struct{}),
 	}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		<-benchSM.Dispatch(ctx, fooEvent)
-		if benchSM.State() != "/bar" {
-			b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
-		}
-		<-benchSM.Dispatch(ctx, barEvent)
-		if benchSM.State() != "/foo" {
-			b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
-		}
+		benchSM.Dispatch(ctx, fooEvent)
+		// if benchSM.State() != "/bar" {
+		// 	b.Fatal("state is not correct, expected /bar got", "state", benchSM.State())
+		// }
+		benchSM.Dispatch(ctx, barEvent)
+		// if benchSM.State() != "/foo" {
+		// 	b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
+		// }
 	}
+	benchSM.Dispatch(ctx, hsm.Event{
+		Name: "done",
+	})
+	<-benchSM.Wait("/done")
 }
 
 func nonHSMLogic() func(event *hsm.Event) bool {

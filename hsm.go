@@ -239,6 +239,12 @@ type queue struct {
 	partition uint64
 }
 
+func (q *queue) len() int {
+	q.mutex.RLock()
+	defer q.mutex.RUnlock()
+	return len(q.events)
+}
+
 func (q *queue) pop() (Event, bool) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
@@ -1194,7 +1200,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
 		hsm.processing.Store(true)
 		hsm.state = hsm.initial(ctx, &hsm.model.state, event)
-		hsm.process(ctx, event)
+		go hsm.process(ctx, event)
 	}
 	sm.start(hsm)
 	return sm
@@ -1563,14 +1569,12 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		sm.queue.push(event)
 		return event.Done
 	}
-	if id := ctx.Value(&sm.active); id != nil {
-		if _, ok := sm.active[id]; ok {
-			sm.processing.Store(true)
-			go sm.process(ctx, event)
-			return event.Done
-		}
+	sm.processing.Store(true)
+	go sm.process(ctx, event)
+	if event.Done == nil {
+		return noevent.Done
 	}
-	return sm.process(ctx, event)
+	return event.Done
 }
 
 func wildcard(pattern string) (string, bool) {
@@ -1711,11 +1715,18 @@ func done(channel chan struct{}) <-chan struct{} {
 	select {
 	case _, ok := <-channel:
 		if !ok {
+			// Channel is closed, return it without modification
 			return channel
 		}
-		break
 	default:
-		break
+		// Channel is open, try to send a value
+		select {
+		case channel <- struct{}{}:
+			return channel
+			// Successfully sent completion signal
+		default:
+			// Channel already has a value
+		}
 	}
 	close(channel)
 	return channel
