@@ -2,7 +2,6 @@ package hsm_test
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"slices"
 	"testing"
@@ -550,7 +549,6 @@ func BenchmarkHSM(b *testing.B) {
 	}
 	benchSM = hsm.Start(ctx, &THSM{}, &benchModel)
 	b.ResetTimer()
-	slog.Info("BenchmarkHSM", "N", b.N)
 	for i := 0; i < b.N; i++ {
 		benchSM.Dispatch(ctx, fooEvent)
 		// if benchSM.State() != "/bar" {
