@@ -2,6 +2,7 @@ package hsm_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"slices"
 	"testing"
@@ -464,7 +465,6 @@ func TestDispatchTo(t *testing.T) {
 	}
 }
 func noBehavior(ctx context.Context, hsm *THSM, event hsm.Event) {
-
 }
 
 func TestIsAncestor(t *testing.T) {
@@ -517,10 +517,8 @@ var benchModel = hsm.Define(
 	"TestHSM",
 	hsm.State("foo", hsm.Entry(noBehavior),
 		hsm.Exit(noBehavior)),
-
 	hsm.State("bar", hsm.Entry(noBehavior),
 		hsm.Exit(noBehavior)),
-	hsm.State("done"),
 	hsm.Transition(
 		hsm.Trigger("foo"),
 		hsm.Source("foo"),
@@ -534,11 +532,6 @@ var benchModel = hsm.Define(
 		hsm.Effect(noBehavior),
 	),
 	hsm.Initial(hsm.Target("foo"), hsm.Effect(noBehavior)),
-	hsm.Transition(
-		hsm.Trigger("done"),
-		hsm.Source("foo"),
-		hsm.Target("done"),
-	),
 	// hsm.Telemetry(provider.Tracer("github.com/stateforward/go-hsm")),
 )
 var benchSM = hsm.Start(context.Background(), &THSM{}, &benchModel)
@@ -554,8 +547,9 @@ func BenchmarkHSM(b *testing.B) {
 		Name: "bar",
 		// Done: make(chan struct{}),
 	}
+	benchSM = hsm.Start(ctx, &THSM{}, &benchModel)
 	b.ResetTimer()
-
+	slog.Info("BenchmarkHSM", "N", b.N)
 	for i := 0; i < b.N; i++ {
 		benchSM.Dispatch(ctx, fooEvent)
 		// if benchSM.State() != "/bar" {
@@ -566,10 +560,7 @@ func BenchmarkHSM(b *testing.B) {
 		// 	b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
 		// }
 	}
-	benchSM.Dispatch(ctx, hsm.Event{
-		Name: "done",
-	})
-	<-benchSM.Wait("/done")
+	<-benchSM.Stop(ctx)
 }
 
 func nonHSMLogic() func(event *hsm.Event) bool {

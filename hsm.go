@@ -1249,7 +1249,7 @@ func (sm *hsm[T]) Stop(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		var ok bool
-		<-sm.Dispatch(ctx, noevent)
+		<-sm.Dispatch(ctx, noevent.WithDone(make(chan struct{})))
 		sm.processing.Store(true)
 		for sm.state != nil {
 			sm.exit(ctx, sm.state, noevent)
