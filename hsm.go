@@ -1217,7 +1217,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
 		hsm.processing.Store(true)
 		hsm.state = hsm.initial(ctx, &hsm.model.state, event)
-		go hsm.process(ctx, event)
+		hsm.process(ctx)
 	}
 	sm.start(hsm)
 	return sm
@@ -1550,11 +1550,10 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 	return nil
 }
 
-func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
+func (sm *hsm[T]) process(ctx context.Context) {
 	sm.processing.Store(true)
 	defer sm.processing.Store(false)
-	var results <-chan struct{} = event.Done
-	ok := true
+	event, ok := sm.queue.pop()
 	for ok {
 		qualifiedName := sm.state.QualifiedName()
 		for qualifiedName != "" {
@@ -1568,10 +1567,9 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) <-chan struct{} {
 			}
 			qualifiedName = source.Owner()
 		}
-		results = done(event.Done)
+		done(event.Done)
 		event, ok = sm.queue.pop()
 	}
-	return results
 }
 
 func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
@@ -1592,12 +1590,12 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		ctx, end = sm.trace(ctx, "dispatch", event)
 		defer end()
 	}
-	if sm.processing.Load() {
+	if sm.queue.len() > 0 {
 		sm.queue.push(event)
 		return event.Done
 	}
-	sm.processing.Store(true)
-	go sm.process(ctx, event)
+	sm.queue.push(event)
+	go sm.process(ctx)
 	return event.Done
 }
 

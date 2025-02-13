@@ -561,7 +561,7 @@ func BenchmarkHSM(b *testing.B) {
 		// 	b.Fatal("state is not correct, expected /foo got", "state", benchSM.State())
 		// }
 	}
-	<-benchSM.Stop(ctx)
+	// <-benchSM.Stop(ctx)
 }
 
 func nonHSMLogic() func(event *hsm.Event) bool {
