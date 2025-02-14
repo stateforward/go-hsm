@@ -1170,7 +1170,7 @@ var Keys = struct {
 	HSM: key[HSM]{},
 }
 
-func match(pattern, s string) bool {
+func Match(pattern, s string) bool {
 	var lastErotemeCluster byte
 	var patternIndex, sIndex, lastStar, lastEroteme int
 	patternLen := len(pattern)
@@ -1693,12 +1693,12 @@ func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 	sm.mutex.RLock()
 	currentState := sm.state.QualifiedName()
 	sm.mutex.RUnlock()
-	if match(pattern, currentState) {
+	if Match(pattern, currentState) {
 		done <- struct{}{}
 		return done
 	}
 	for key, element := range sm.model.namespace {
-		if isKind(element, kind.State) && match(pattern, key) {
+		if isKind(element, kind.State) && Match(pattern, key) {
 			sm.waiting.Store(done, pattern)
 			return done
 		}
@@ -1709,7 +1709,7 @@ func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
 
 func (sm *hsm[T]) notify(state string) {
 	sm.waiting.Range(func(channel, pattern any) bool {
-		if match(pattern.(string), state) {
+		if Match(pattern.(string), state) {
 			done := channel.(chan struct{})
 			select {
 			case done <- struct{}{}:
