@@ -1646,8 +1646,9 @@ func (sm *hsm[T]) process(ctx context.Context, event Event) {
 				break
 			}
 			if transition := sm.enabled(ctx, source, event); transition != nil {
+				state := sm.transition(ctx, sm.state, transition, event)
 				sm.mutex.Lock()
-				sm.state = sm.transition(ctx, sm.state, transition, event)
+				sm.state = state
 				sm.mutex.Unlock()
 				break
 			}
