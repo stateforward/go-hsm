@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	Kinds           = kind.Kinds()
-	ErrNilHSM       = errors.New("hsm is nil")
-	ErrInvalidState = errors.New("invalid state")
-	ErrMissingHSM   = errors.New("missing hsm in context")
+	Kinds             = kind.Kinds()
+	ErrNilHSM         = errors.New("hsm is nil")
+	ErrInvalidState   = errors.New("invalid state")
+	ErrMissingHSM     = errors.New("missing hsm in context")
+	ErrInvalidPattern = errors.New("invalid pattern")
 )
 
 // Package hsm provides a powerful hierarchical state machine (HSM) implementation for Go.
@@ -1063,7 +1064,6 @@ type Context interface {
 	State() string
 	// Dispatch sends an event to the state machine and returns a channel that closes when processing completes.
 	Dispatch(ctx context.Context, event Event) <-chan struct{}
-	Wait(state string) <-chan struct{}
 	Stop(ctx context.Context) <-chan struct{}
 	start(Context)
 }
@@ -1111,13 +1111,6 @@ func (hsm HSM) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 	return hsm.Context.Dispatch(ctx, event)
 }
 
-func (hsm HSM) Wait(state string) <-chan struct{} {
-	if hsm.Context == nil {
-		return noevent.Done
-	}
-	return hsm.Context.Wait(state)
-}
-
 type subcontext = context.Context
 
 type active struct {
@@ -1139,7 +1132,6 @@ type hsm[T Context] struct {
 	queue      queue
 	context    T
 	trace      Trace
-	waiting    *sync.Map
 	timeouts   timeouts
 	processing sync.Mutex
 	mutex      sync.RWMutex
@@ -1170,11 +1162,11 @@ var Keys = struct {
 	HSM: key[HSM]{},
 }
 
-func Match(pattern, s string) bool {
+func Match(state, pattern string) bool {
 	var lastErotemeCluster byte
 	var patternIndex, sIndex, lastStar, lastEroteme int
 	patternLen := len(pattern)
-	sLen := len(s)
+	sLen := len(state)
 	star := -1
 	eroteme := -1
 
@@ -1199,7 +1191,7 @@ Loop:
 		// '?' matches one character. Store its position and match exactly one character in the string.
 		eroteme = patternIndex
 		lastEroteme = sIndex
-		lastErotemeCluster = byte(s[sIndex])
+		lastErotemeCluster = byte(state[sIndex])
 	case '*':
 		// '*' matches zero or more characters. Store its position and increment the pattern index.
 		star = patternIndex
@@ -1208,7 +1200,7 @@ Loop:
 		goto Loop
 	default:
 		// If the characters don't match, check if there was a previous '?' or '*' to backtrack.
-		if pattern[patternIndex] != s[sIndex] {
+		if pattern[patternIndex] != state[sIndex] {
 			if eroteme != -1 {
 				patternIndex = eroteme + 1
 				sIndex = lastEroteme
@@ -1227,7 +1219,7 @@ Loop:
 		}
 
 		// If the characters match, check if it was not the same to validate the eroteme.
-		if eroteme != -1 && lastErotemeCluster != byte(s[sIndex]) {
+		if eroteme != -1 && lastErotemeCluster != byte(state[sIndex]) {
 			eroteme = -1
 		}
 	}
@@ -1279,7 +1271,6 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		active:  map[any]*active{},
 		context: sm,
 		queue:   queue{},
-		waiting: &sync.Map{},
 	}
 	hsm.processing.Lock()
 	if len(config) > 0 {
@@ -1431,7 +1422,6 @@ func (sm *hsm[T]) enter(ctx context.Context, element elements.NamedElement, even
 				}
 			}
 		}
-		sm.notify(state.QualifiedName())
 		if !defaultEntry || state.initial == "" {
 			return state
 		}
@@ -1637,6 +1627,14 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 }
 
 func (sm *hsm[T]) process(ctx context.Context) {
+	if sm == nil {
+		return
+	}
+	if sm.trace != nil {
+		var end func(...any)
+		ctx, end = sm.trace(ctx, "process")
+		defer end()
+	}
 	event, ok := sm.queue.pop()
 	for ok {
 		qualifiedName := sm.state.QualifiedName()
@@ -1684,41 +1682,6 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		return event.Done
 	}
 	return event.Done
-}
-
-func (sm *hsm[T]) Wait(pattern string) <-chan struct{} {
-	if sm == nil {
-		return noevent.Done
-	}
-	done := make(chan struct{}, 1)
-	sm.mutex.RLock()
-	currentState := sm.state.QualifiedName()
-	sm.mutex.RUnlock()
-	if Match(pattern, currentState) {
-		done <- struct{}{}
-		return done
-	}
-	for key, element := range sm.model.namespace {
-		if isKind(element, kind.State) && Match(pattern, key) {
-			sm.waiting.Store(done, pattern)
-			return done
-		}
-	}
-	close(done)
-	return done
-}
-
-func (sm *hsm[T]) notify(state string) {
-	sm.waiting.Range(func(channel, pattern any) bool {
-		if Match(pattern.(string), state) {
-			done := channel.(chan struct{})
-			select {
-			case done <- struct{}{}:
-			default:
-			}
-		}
-		return true
-	})
 }
 
 // Dispatch sends an event to a specific state machine instance.
@@ -1815,11 +1778,4 @@ func done(channel chan struct{}) <-chan struct{} {
 	}
 	close(channel)
 	return channel
-}
-
-func Wait(ctx context.Context, qualifiedName string) <-chan struct{} {
-	if hsm, ok := FromContext(ctx); ok {
-		return hsm.Wait(qualifiedName)
-	}
-	return noevent.Done
 }

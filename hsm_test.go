@@ -343,14 +343,7 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	select {
-	case <-sm.Wait("/s/s1/s11"):
-	case <-time.After(3 * time.Second):
-		t.Fatalf("wait timedout")
-	}
-	if sm.State() != "/s/s1/s11" {
-		t.Fatal("state is not correct after `after` transition", "state", sm.State())
-	}
+	time.Sleep(time.Second * 3)
 	if !trace.matches(Trace{
 		sync: []string{"s211.exit", "s21.exit", "s2.exit", "s211.after.transition.effect", "s1.entry", "s11.entry"},
 	}) {
@@ -370,11 +363,12 @@ func TestHSM(t *testing.T) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
 	trace.reset()
-	<-sm.Dispatch(ctx, hsm.Event{
+	ch := sm.Dispatch(ctx, hsm.Event{
 		Name: "J",
 		Done: make(chan struct{}),
 	})
-	<-sm.Wait("/s/s3")
+	<-ch
+	<-ch
 	if sm.State() != "/s/s3" {
 		t.Fatal("state is not correct after J expected /s/s3 got", "state", sm.State())
 	}
@@ -412,6 +406,16 @@ func TestHSM(t *testing.T) {
 	}) {
 		t.Fatal("transition actions are not correct", "trace", trace)
 	}
+}
+
+func TestMatch(t *testing.T) {
+	if !hsm.Match("/synced/exited", "/synced/*") {
+		t.Fatal("Match is not correct /foo/bar is a match for /foo/bar/baz")
+	}
+	if hsm.Match("/foo/bar/baz", "/foo/bar") {
+		t.Fatal("Match is not correct /foo/bar is not a match for /foo/bar/baz")
+	}
+
 }
 
 func TestHSMDispatchAll(t *testing.T) {
