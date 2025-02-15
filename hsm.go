@@ -1301,7 +1301,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	all.Store(hsm.id, hsm)
 	hsm.method = func(ctx context.Context, _ T, event Event) {
 		hsm.state = hsm.initial(ctx, &hsm.model.state, event)
-		hsm.process(ctx, noevent)
+		hsm.process(ctx)
 	}
 	sm.start(hsm)
 	return sm
@@ -1636,8 +1636,8 @@ func (sm *hsm[T]) enabled(ctx context.Context, source elements.Vertex, event Eve
 	return nil
 }
 
-func (sm *hsm[T]) process(ctx context.Context, event Event) {
-	ok := true
+func (sm *hsm[T]) process(ctx context.Context) {
+	event, ok := sm.queue.pop()
 	for ok {
 		qualifiedName := sm.state.QualifiedName()
 		for qualifiedName != "" {
@@ -1678,11 +1678,11 @@ func (sm *hsm[T]) Dispatch(ctx context.Context, event Event) <-chan struct{} {
 		ctx, end = sm.trace(ctx, "dispatch", event)
 		defer end()
 	}
+	sm.queue.push(event)
 	if sm.processing.TryLock() {
-		go sm.process(ctx, event)
+		go sm.process(ctx)
 		return event.Done
 	}
-	sm.queue.push(event)
 	return event.Done
 }
 
