@@ -1150,6 +1150,8 @@ type Config struct {
 	Id string
 	// TerminateTimeout is the timeout for the state activity to terminate.
 	TerminateTimeout time.Duration
+	// Name is the name of the state machine.
+	Name string
 }
 
 type key[T any] struct{}
@@ -1263,8 +1265,7 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 	hsm := &hsm[T]{
 		behavior: behavior[T]{
 			element: element{
-				kind:          kind.StateMachine,
-				qualifiedName: model.QualifiedName(),
+				kind: kind.StateMachine,
 			},
 		},
 		model:   model,
@@ -1277,9 +1278,13 @@ func Start[T Context](ctx context.Context, sm T, model *Model, config ...Config)
 		hsm.trace = config[0].Trace
 		hsm.id = config[0].Id
 		hsm.timeouts.terminate = config[0].TerminateTimeout
+		hsm.qualifiedName = config[0].Name
 	}
 	if hsm.id == "" {
 		hsm.id = id()
+	}
+	if hsm.qualifiedName == "" {
+		hsm.qualifiedName = model.QualifiedName()
 	}
 	if hsm.timeouts.terminate == 0 {
 		hsm.timeouts.terminate = time.Millisecond
