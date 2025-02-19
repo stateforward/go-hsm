@@ -188,6 +188,8 @@ func TestHSM(t *testing.T) {
 		foo: 0,
 	}, &model, hsm.Config{
 		Trace: tracer,
+		Name:  "TestHSM",
+		Id:    "test",
 	})
 	plantuml.Generate(os.Stdout, &model)
 	if sm.State() != "/s/s2/s21/s211" {
