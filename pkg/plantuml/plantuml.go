@@ -18,6 +18,9 @@ func idFromQualifiedName(qualifiedName string) string {
 }
 
 func generateState(builder *strings.Builder, depth int, state elements.NamedElement, model elements.Model, allElements []elements.NamedElement, visited map[string]any) {
+	if state.QualifiedName() == "/" {
+		return
+	}
 	id := idFromQualifiedName(state.QualifiedName())
 	indent := strings.Repeat(" ", depth*2)
 	composite := false
@@ -110,7 +113,7 @@ func generateTransition(builder *strings.Builder, depth int, transition elements
 }
 
 func generateElements(builder *strings.Builder, depth int, model elements.Model, allElements []elements.NamedElement, visited map[string]any) {
-	fmt.Fprintf(builder, "@startuml %s\n", model.Id())
+	fmt.Fprintf(builder, "@startuml %s\n", path.Base(model.Id()))
 	for _, element := range allElements {
 		if _, ok := visited[element.QualifiedName()]; ok {
 			continue

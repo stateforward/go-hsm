@@ -1,27 +1,64 @@
-@startuml
+@startuml TestHSM
+  state initial_choice <<choice>>
   state s{
     state s.s1{
       state s.s1.s11{
       }
+      state s.s1.s11: entry / entry
+      state s.s1.s11: activity / activity
+      state s.s1.s11: exit / exit
+      [*] ----> s.s1.s11 :  / effect
     }
+    state s.s1: entry / entry
+    state s.s1: activity / activity
+    state s.s1: exit / exit
     state s.s2{
       state s.s2.s21{
         state s.s2.s21.s211
+        state s.s2.s21.s211: entry / entry
+        state s.s2.s21.s211: activity / activity
+        state s.s2.s21.s211: exit / exit
+        [*] ----> s.s2.s21.s211 :  / effect
       }
+      state s.s2.s21: entry / entry
+      state s.s2.s21: activity / activity
+      state s.s2.s21: exit / exit
+      [*] ----> s.s2.s21.s211 :  / effect
     }
+    state s.s2: entry / entry
+    state s.s2: activity / activity
+    state s.s2: exit / exit
+    state s.s3
+    state s.s3: entry / entry
+    state s.s3: activity / activity
+    state s.s3: exit / exit
+    [*] ----> s.s1.s11 :  / effect
   }
-  state s.s1.s11.choice_65 <<choice>>
-s.s1.s11.choice_65 ----> s.s1
-s.s1.s11.choice_65 ----> s.s2
-s.s1 ----> s.s1: A
-s.s2.s21.s211 ----> s.s1.s11: G
-s.s2.s21 ----> s.s2.s21: A
-s.s2 ----> s.s1: C
-s.s1.s11 ----> s.s1: D
-s.s1 ----> s: D
-s.s1 ----> s.s2: C
-s ----> s.s1.s11: E
-s.s1.s11 ----> s.s2.s21.s211: G
-s.s2.s21.s211 ----> s.s1.s11: after-0
-s.s1.s11 ----> s.s1.s11.choice_65: H
-@enduml
+  state s: entry / entry
+  state s: activity / activity
+  state s: exit / exit
+  state s.s1.s11.choice_46 <<choice>>
+  state t
+[*] ----> initial_choice :  / effect
+initial_choice ----> s.s2
+s.s1.s11.choice_46 ----> s.s1 :  [guard]
+s.s1.s11.choice_46 ----> s.s2 :  / effect
+state s.s1 : I / effect
+s.s1 ----> s.s1 : A / effect
+state s.s1 : 0
+s.s2.s21.s211 ----> s.s1.s11 : G / effect
+s.s2.s21 ----> s.s2.s21 : A
+s.s2 ----> s.s1 : C / effect
+s.s1.s11 ----> s.s1 : D [guard] / effect
+state s : *.P.* / effect
+s.s1 ----> s : D [guard] / effect
+s ----> s : D / effect
+s.s1 ----> s.s2 : C / effect
+s ----> s.s1.s11 : E / effect
+s.s1.s11 ----> s.s2.s21.s211 : G / effect
+state s : I [guard] / effect
+s.s2.s21.s211 ----> s.s1.s11 : s211.after [guard] / effect
+s.s1.s11 ----> s.s1.s11.choice_46 : H / effect
+s.s2.s21.s211 ----> s.s1.s11 : J / effect
+s.s1.s11 ----> s.s3 : K / effect
+state  : Z / effect
