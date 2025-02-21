@@ -237,9 +237,8 @@ var noevent = Event{
 }
 
 type queue struct {
-	mutex     sync.RWMutex
-	events    []Event
-	partition uint64
+	mutex  sync.RWMutex
+	events []Event
 }
 
 func (q *queue) len() int {
@@ -256,9 +255,6 @@ func (q *queue) pop() (Event, bool) {
 	}
 	event := q.events[0]
 	q.events = q.events[1:]
-	if q.partition > 0 {
-		q.partition--
-	}
 	return event, true
 }
 
@@ -266,8 +262,7 @@ func (q *queue) push(event Event) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 	if kind.IsKind(event.Kind, kind.CompletionEvent) {
-		q.events = append(q.events[q.partition:], append([]Event{event}, q.events[:q.partition]...)...)
-		q.partition++
+		q.events = append([]Event{event}, q.events...)
 	} else {
 		q.events = append(q.events, event)
 	}
